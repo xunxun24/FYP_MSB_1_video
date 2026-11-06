@@ -10,7 +10,9 @@ document.addEventListener('DOMContentLoaded', () => {
     encImage: null,
     encMode: 'msb',
     encScope: 'full', // 'full' | 'person' | 'face' | 'custom'
-    decScope: 'full', // 'full' | 'person' | 'face' | 'custom'
+    decMeta: null,    // Auto-detected encryption metadata for the image loaded in the Decrypt tab
+    lastEncryptedMeta: null, // Metadata (scope, exact mask/ROI, key type) of the last encryption
+    segToken: 0,      // Guards against overlapping AI segmentation runs
     bodyMask: null,   // Uint8Array(width * height)
     faceMask: null,   // Uint8Array(width * height)
     allMask: null,    // Uint8Array(width * height)
@@ -21,10 +23,17 @@ document.addEventListener('DOMContentLoaded', () => {
     detectedFaceStats: { pixelCount: 0, coveragePct: 0, topX: 0, topY: 0 },
     isAiDetecting: false,
     aiModelsLoaded: false,
+    encFileName: 'image',
+    decFileName: 'restored_photo',
     decImage: null,
+    decMsbxBytes: null,
+    decMsbxHeader: null,
     decMode: 'msb',
     lastOriginalImageData: null,
     lastEncryptedImageData: null,
+    lastEncryptedMSBX: null,
+    lastEncryptedHeader: null,
+    lastDecryptedImageData: null,
     lastEncryptedScope: 'full',
     lastEncryptedPassword: '',
     lastEncryptedKeyType: 'text',
@@ -86,6 +95,9 @@ document.addEventListener('DOMContentLoaded', () => {
     valEncMse: document.getElementById('val-enc-mse'),
     valEncPsnr: document.getElementById('val-enc-psnr'),
     valEncSwapped: document.getElementById('val-enc-swapped'),
+    encKSelect: document.getElementById('enc-k-select'),
+    btnDownloadMsbx: document.getElementById('btn-download-msbx'),
+    encMsbxInfo: document.getElementById('enc-msbx-info'),
     encExportFormat: document.getElementById('enc-export-format'),
     encQuality: document.getElementById('enc-quality'),
     jpegQualityGroup: document.getElementById('jpeg-quality-group'),
@@ -96,15 +108,12 @@ document.addEventListener('DOMContentLoaded', () => {
     decDropZone: document.getElementById('dec-drop-zone'),
     decFileInput: document.getElementById('dec-file-input'),
     btnUseEncryptedFromEnc: document.getElementById('btn-use-encrypted-from-enc'),
-    btnDecScopeFull: document.getElementById('btn-dec-scope-full'),
-    btnDecScopePerson: document.getElementById('btn-dec-scope-person'),
-    btnDecScopeFace: document.getElementById('btn-dec-scope-face'),
-    btnDecScopeCustom: document.getElementById('btn-dec-scope-custom'),
-    subDecPerson: document.getElementById('sub-dec-person'),
-    subDecFace: document.getElementById('sub-dec-face'),
-    subDecCustom: document.getElementById('sub-dec-custom'),
-    btnDecKeyTypeText: document.getElementById('btn-dec-keytype-text'),
-    btnDecKeyTypeImage: document.getElementById('btn-dec-keytype-image'),
+    decErrorBanner: document.getElementById('dec-error-banner'),
+    decErrorTitle: document.getElementById('dec-error-title'),
+    decErrorText: document.getElementById('dec-error-text'),
+    decMsbxMeta: document.getElementById('dec-msbx-meta'),
+    decScopeInfo: document.getElementById('dec-scope-info'),
+    decScopeInfoText: document.getElementById('dec-scope-info-text'),
     decTextKeyBox: document.getElementById('dec-text-key-box'),
     decImgKeyBox: document.getElementById('dec-img-key-box'),
     decKeyImageDropzone: document.getElementById('dec-key-image-dropzone'),
@@ -165,7 +174,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const targetPane = document.getElementById(tab.getAttribute('data-tab'));
       if (targetPane) targetPane.classList.add('active');
 
-      if (tab.getAttribute('data-tab') === 'tab-decrypt') {
+      if (tab.getAttribute('data-tab') === 'decrypt-tab') {
         updateDecButtonState();
       }
     });
@@ -224,30 +233,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function updateDecButtonState() {
     if (!DOM.btnProcessDecrypt) return;
-    if (!state.decImage) {
+
+    const hasPwd = !!(DOM.decPassword && DOM.decPassword.value.trim().length > 0);
+    const hasImgKey = !!state.decKeyImage;
+
+    // Password badge: either option satisfies the key requirement
+    if (DOM.decPwdBadge) {
+      if (hasPwd) {
+        DOM.decPwdBadge.className = 'key-req-badge ready';
+        DOM.decPwdBadge.innerHTML = '<i class="fa-solid fa-circle-check"></i> Password Set';
+      } else if (hasImgKey) {
+        DOM.decPwdBadge.className = 'key-req-badge optional';
+        DOM.decPwdBadge.innerHTML = '<i class="fa-solid fa-minus"></i> Not needed (key image loaded)';
+      } else {
+        DOM.decPwdBadge.className = 'key-req-badge';
+        DOM.decPwdBadge.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i> Password or Key Image Required';
+      }
+    }
+    if (DOM.decImgBadge) {
+      if (hasImgKey) {
+        DOM.decImgBadge.className = 'key-req-badge ready';
+        DOM.decImgBadge.innerHTML = '<i class="fa-solid fa-circle-check"></i> Key Image Loaded';
+      } else {
+        DOM.decImgBadge.className = 'key-req-badge optional';
+        DOM.decImgBadge.innerHTML = '<i class="fa-solid fa-circle-info"></i> Only if encrypted with an image key';
+      }
+    }
+
+    if (!state.decImage && !state.decMsbxBytes) {
       DOM.btnProcessDecrypt.disabled = true;
       DOM.btnProcessDecrypt.classList.remove('btn-key-needed');
       DOM.btnProcessDecrypt.innerHTML = '<i class="fa-solid fa-rotate-left"></i> Restore Original Image';
       return;
     }
 
-    if (state.decKeyType === 'image' && !state.decKeyImage) {
+    if (!hasPwd && !hasImgKey) {
       DOM.btnProcessDecrypt.disabled = false;
       DOM.btnProcessDecrypt.classList.add('btn-key-needed');
-      DOM.btnProcessDecrypt.innerHTML = '<i class="fa-solid fa-image"></i> Please Upload Key Image First';
+      DOM.btnProcessDecrypt.innerHTML = '<i class="fa-solid fa-key"></i> Enter Password or Upload Key Image';
       return;
-    }
-
-    // Update password badge dynamically
-    if (state.decKeyType === 'text' && DOM.decPwdBadge) {
-      const hasPwd = DOM.decPassword && DOM.decPassword.value.trim().length > 0;
-      if (hasPwd) {
-        DOM.decPwdBadge.className = 'key-req-badge ready';
-        DOM.decPwdBadge.innerHTML = '<i class="fa-solid fa-circle-check"></i> Password Set';
-      } else {
-        DOM.decPwdBadge.className = 'key-req-badge';
-        DOM.decPwdBadge.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i> Password Required';
-      }
     }
 
     DOM.btnProcessDecrypt.disabled = false;
@@ -292,41 +316,8 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    // Decrypt Tab Key Type Toggle (Text Password vs Image as Key)
-    if (DOM.btnDecKeyTypeText && DOM.btnDecKeyTypeImage) {
-      DOM.btnDecKeyTypeText.addEventListener('click', () => {
-        state.decKeyType = 'text';
-        DOM.btnDecKeyTypeText.classList.add('active');
-        DOM.btnDecKeyTypeImage.classList.remove('active');
-        const rText = DOM.btnDecKeyTypeText.querySelector('.key-card-radio');
-        const rImg = DOM.btnDecKeyTypeImage.querySelector('.key-card-radio');
-        if (rText) rText.innerHTML = '<i class="fa-solid fa-circle-dot"></i>';
-        if (rImg) rImg.innerHTML = '<i class="fa-regular fa-circle"></i>';
-        if (DOM.decTextKeyBox) DOM.decTextKeyBox.style.display = 'block';
-        if (DOM.decImgKeyBox) DOM.decImgKeyBox.style.display = 'none';
-        if (DOM.decPassword) DOM.decPassword.focus();
-        updateDecButtonState();
-      });
-
-      DOM.btnDecKeyTypeImage.addEventListener('click', () => {
-        const wasAlreadyImage = (state.decKeyType === 'image');
-        state.decKeyType = 'image';
-        DOM.btnDecKeyTypeImage.classList.add('active');
-        DOM.btnDecKeyTypeText.classList.remove('active');
-        const rText = DOM.btnDecKeyTypeText.querySelector('.key-card-radio');
-        const rImg = DOM.btnDecKeyTypeImage.querySelector('.key-card-radio');
-        if (rImg) rImg.innerHTML = '<i class="fa-solid fa-circle-dot"></i>';
-        if (rText) rText.innerHTML = '<i class="fa-regular fa-circle"></i>';
-        if (DOM.decTextKeyBox) DOM.decTextKeyBox.style.display = 'none';
-        if (DOM.decImgKeyBox) DOM.decImgKeyBox.style.display = 'block';
-        updateDecButtonState();
-
-        // Immediately prompt user to choose an image file
-        if (!state.decKeyImage || wasAlreadyImage) {
-          if (DOM.decKeyImageInput) DOM.decKeyImageInput.click();
-        }
-      });
-    }
+    // Decrypt Tab: no key-source toggle. The password field and key-image upload are both
+    // shown, and the key type is inferred from whichever one the user provides.
 
     // Password input listeners for dynamic badge feedback
     if (DOM.encPassword) {
@@ -384,10 +375,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (DOM.decKeyImgHash) DOM.decKeyImgHash.innerHTML = `<i class="fa-solid fa-fingerprint"></i> SHA-256: <span>${info.displayHash}</span>`;
             if (DOM.decKeyImgPrompt) DOM.decKeyImgPrompt.style.display = 'none';
             if (DOM.decKeyImgCard) DOM.decKeyImgCard.style.display = 'flex';
-            if (DOM.decImgBadge) {
-              DOM.decImgBadge.className = 'key-req-badge ready';
-              DOM.decImgBadge.innerHTML = '<i class="fa-solid fa-circle-check"></i> Key Image Loaded';
-            }
             updateDecButtonState();
           }
         };
@@ -501,10 +488,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (DOM.decKeyImageInput) DOM.decKeyImageInput.value = '';
         if (DOM.decKeyImgPrompt) DOM.decKeyImgPrompt.style.display = 'block';
         if (DOM.decKeyImgCard) DOM.decKeyImgCard.style.display = 'none';
-        if (DOM.decImgBadge) {
-          DOM.decImgBadge.className = 'key-req-badge';
-          DOM.decImgBadge.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i> Matching Key Image Required';
-        }
         updateDecButtonState();
       });
     }
@@ -553,11 +536,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function clearEncryptedResultView() {
     state.lastEncryptedImageData = null;
+    state.lastEncryptedMSBX = null;
+    state.lastEncryptedHeader = null;
     clearCanvasAndShowPlaceholder(DOM.canvasEncResult, DOM.phEncResult);
     if (DOM.encMetrics) DOM.encMetrics.style.display = 'none';
     if (DOM.valEncMse) DOM.valEncMse.textContent = '0.00';
     if (DOM.valEncPsnr) DOM.valEncPsnr.textContent = '∞ dB';
     if (DOM.valEncSwapped) DOM.valEncSwapped.textContent = '0';
+    if (DOM.btnDownloadMsbx) DOM.btnDownloadMsbx.disabled = true;
+    if (DOM.encMsbxInfo) {
+      DOM.encMsbxInfo.style.display = 'none';
+      DOM.encMsbxInfo.innerHTML = '';
+    }
     if (DOM.btnDownloadEncrypted) DOM.btnDownloadEncrypted.disabled = true;
 
     // Reset preview tabs to Side-by-Side if currently toggled to Result Only
@@ -578,6 +568,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function clearDecryptedResultView() {
+    state.lastDecryptedImageData = null;
     clearCanvasAndShowPlaceholder(DOM.canvasDecResult, DOM.phDecResult);
     if (DOM.decMetrics) DOM.decMetrics.style.display = 'none';
     if (DOM.decFidelityCard) DOM.decFidelityCard.style.display = 'none';
@@ -585,6 +576,66 @@ document.addEventListener('DOMContentLoaded', () => {
     if (DOM.valDecPsnr) DOM.valDecPsnr.textContent = '∞ dB';
     if (DOM.valDecSwapped) DOM.valDecSwapped.textContent = '0';
     if (DOM.btnDownloadRestored) DOM.btnDownloadRestored.disabled = true;
+  }
+
+  function showDecError(title, message) {
+    if (!DOM.decErrorBanner) return;
+    if (DOM.decErrorTitle) DOM.decErrorTitle.textContent = title || 'Decryption / Verification Error';
+    if (DOM.decErrorText) DOM.decErrorText.textContent = message || 'Failed to verify or decrypt the container.';
+    DOM.decErrorBanner.style.display = 'flex';
+  }
+
+  function hideDecError() {
+    if (!DOM.decErrorBanner) return;
+    DOM.decErrorBanner.style.display = 'none';
+    if (DOM.decErrorText) DOM.decErrorText.textContent = '';
+  }
+
+  function renderMsbxHeaderCard(el, header, byteLength, titleLabel) {
+    if (!el || !header) return;
+    const kb = (byteLength / 1024).toFixed(1);
+    const scopeName = SCOPE_LABELS[header.scope] || 'Entire Image';
+    el.innerHTML = `
+      <div class="msbx-meta-header">
+        <span><i class="fa-solid fa-file-shield"></i> ${titleLabel || 'Portable .msbx Container (68-Byte Fixed Header)'}</span>
+        <span>${kb} KB</span>
+      </div>
+      <div class="msbx-meta-grid">
+        <div class="msbx-meta-item">
+          <span class="msbx-meta-label">Magic / Version</span>
+          <span class="msbx-meta-val">${header.magic} • v${header.version}</span>
+        </div>
+        <div class="msbx-meta-item">
+          <span class="msbx-meta-label">Mode / Channels</span>
+          <span class="msbx-meta-val">${header.modeLabel} (mode=${header.imageMode})</span>
+        </div>
+        <div class="msbx-meta-item">
+          <span class="msbx-meta-label">Stage 3 k-MSB</span>
+          <span class="msbx-meta-val">k = ${header.k} bit${header.k > 1 ? 's' : ''}</span>
+        </div>
+        <div class="msbx-meta-item">
+          <span class="msbx-meta-label">Dimensions</span>
+          <span class="msbx-meta-val">${header.width} × ${header.height} px</span>
+        </div>
+        <div class="msbx-meta-item">
+          <span class="msbx-meta-label">KDF Iterations</span>
+          <span class="msbx-meta-val">${header.iterations.toLocaleString()} SHA-256</span>
+        </div>
+        <div class="msbx-meta-item">
+          <span class="msbx-meta-label">Encrypted Scope</span>
+          <span class="msbx-meta-val">${scopeName}</span>
+        </div>
+        <div class="msbx-meta-item full">
+          <span class="msbx-meta-label">16-Byte Random Salt (Hex)</span>
+          <span class="msbx-meta-val">${header.saltHex}</span>
+        </div>
+        <div class="msbx-meta-item full">
+          <span class="msbx-meta-label">32-Byte SHA-256 Verification Tag (Hex)</span>
+          <span class="msbx-meta-val">${header.tagHex}</span>
+        </div>
+      </div>
+    `;
+    el.style.display = 'block';
   }
 
   // Refresh & Reset Encryption Key Source Selection & Inputs
@@ -637,22 +688,17 @@ document.addEventListener('DOMContentLoaded', () => {
     updateEncButtonState();
   }
 
-  // Refresh & Reset Decryption Key Source Selection & Inputs
+  // Refresh & Reset Decryption Key Inputs (password field + key image upload)
   function refreshDecKeySourceUI() {
-    state.decKeyType = 'text';
     state.decKeyImage = null;
 
-    // Clear password input & reset status badge
+    // Clear password input
     if (DOM.decPassword) {
       DOM.decPassword.value = '';
       DOM.decPassword.type = 'password';
     }
     if (DOM.toggleDecPwd) {
       DOM.toggleDecPwd.innerHTML = '<i class="fa-solid fa-eye"></i>';
-    }
-    if (DOM.decPwdBadge) {
-      DOM.decPwdBadge.className = 'key-req-badge';
-      DOM.decPwdBadge.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i> Password Required';
     }
 
     // Reset image key upload input, prompt & card
@@ -663,294 +709,1092 @@ document.addEventListener('DOMContentLoaded', () => {
     if (DOM.decKeyImgName) DOM.decKeyImgName.textContent = '';
     if (DOM.decKeyImgMeta) DOM.decKeyImgMeta.textContent = '';
     if (DOM.decKeyImgHash) DOM.decKeyImgHash.innerHTML = '<i class="fa-solid fa-fingerprint"></i> SHA-256: <span>Calculating...</span>';
-    if (DOM.decImgBadge) {
-      DOM.decImgBadge.className = 'key-req-badge';
-      DOM.decImgBadge.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i> Matching Key Image Required';
-    }
 
-    // Reset selector buttons to Text Password active
-    if (DOM.btnDecKeyTypeText) {
-      DOM.btnDecKeyTypeText.classList.add('active');
-      const rText = DOM.btnDecKeyTypeText.querySelector('.key-card-radio');
-      if (rText) rText.innerHTML = '<i class="fa-solid fa-circle-dot"></i>';
-    }
-    if (DOM.btnDecKeyTypeImage) {
-      DOM.btnDecKeyTypeImage.classList.remove('active');
-      const rImg = DOM.btnDecKeyTypeImage.querySelector('.key-card-radio');
-      if (rImg) rImg.innerHTML = '<i class="fa-regular fa-circle"></i>';
-    }
-
-    // Show Text Password box, hide Image Key box
-    if (DOM.decTextKeyBox) DOM.decTextKeyBox.style.display = 'block';
-    if (DOM.decImgKeyBox) DOM.decImgKeyBox.style.display = 'none';
-
+    // Badges are recomputed from the current inputs
     updateDecButtonState();
   }
 
   /* ==========================================================================
-     AI Neural Vision & Shape Segmentation Module (BodyPix & BlazeFace)
+     AI Human Segmentation with Multi-Face Detection & Edge-Detection Refinement
+     --------------------------------------------------------------------------
+     1. MediaPipe Selfie Multiclass Segmenter (full frame + high-res tiles &
+        per-face crops) -> per-pixel confidence for background (0), hair (1),
+        body-skin (2), face-skin (3), clothes (4), and accessories (5).
+     2. Multi-Scale Face Detection (MediaPipe FaceLandmarker 478-point mesh +
+        BlazeFace detector + tiled zoom passes + face-skin cluster proposals)
+        -> reliably detects all faces in group photos (4, 6, 10+ faces).
+     3. True Edge-Detection Boundary Refinement:
+        - Multi-channel Sobel colour gradient detector
+        - Local Foreground / Background RGB colour affinity in a boundary trimap
+        - Edge-preserving Colour Guided Filter (He et al., 2013) that snaps the
+          contour directly onto the photo's real colour edges (hairline, jawline,
+          cheeks, shoulders, arms, clothing).
      ========================================================================== */
-  let bodyPixNet = null;
-  let blazeFaceModel = null;
+  const MP_VERSION = '0.10.14';
+  const MP_BUNDLE_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs`;
+  const MP_WASM_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`;
+  const MP_SEGMENTER_MODEL = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite';
+  const MP_FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+  const MP_FACE_DETECTOR_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
+
+  // Working resolution long side (px) for AI + edge detection.
+  const SEG_WORK_MAX = 1280;
+
+  // Ordered MediaPipe FaceMesh silhouette (face-oval) landmark indices (clockwise from top-center 10).
+  const FACE_OVAL_IDX = [
+    10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378,
+    400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21,
+    54, 103, 67, 109
+  ];
+
+  // Forehead / upper-temple indices in FACE_OVAL_IDX (expanded slightly upward so hairlines can be edge-traced).
+  const FOREHEAD_SET = new Set([10, 338, 297, 332, 284, 251, 389, 109, 67, 103, 54, 21, 162]);
+
+  let imageSegmenter = null;
+  let faceLandmarker = null;
+  let faceDetector = null;
+
+  function setAiBadge(cls, html) {
+    if (!DOM.aiStatusBadge) return;
+    DOM.aiStatusBadge.className = 'ai-status-badge' + (cls ? ' ' + cls : '');
+    DOM.aiStatusBadge.innerHTML = html;
+  }
 
   async function initAIModels() {
     try {
-      if (window.bodyPix) {
-        bodyPixNet = await window.bodyPix.load({
-          architecture: 'MobileNetV1',
-          outputStride: 16,
-          multiplier: 0.75,
-          quantBytes: 2
+      const vision = await import(MP_BUNDLE_URL);
+      const fileset = await vision.FilesetResolver.forVisionTasks(MP_WASM_URL);
+
+      imageSegmenter = await vision.ImageSegmenter.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: MP_SEGMENTER_MODEL, delegate: 'CPU' },
+        runningMode: 'IMAGE',
+        outputCategoryMask: false,
+        outputConfidenceMasks: true
+      });
+
+      try {
+        faceLandmarker = await vision.FaceLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: MP_FACE_MODEL, delegate: 'CPU' },
+          runningMode: 'IMAGE',
+          numFaces: 12,
+          minFaceDetectionConfidence: 0.20,
+          minFacePresenceConfidence: 0.20
         });
+      } catch (faceErr) {
+        console.warn('Face Landmarker unavailable:', faceErr);
       }
-      if (window.blazeface) {
-        blazeFaceModel = await window.blazeface.load();
+
+      try {
+        faceDetector = await vision.FaceDetector.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: MP_FACE_DETECTOR_MODEL, delegate: 'CPU' },
+          runningMode: 'IMAGE',
+          minDetectionConfidence: 0.20
+        });
+      } catch (detErr) {
+        console.warn('Face Detector unavailable:', detErr);
       }
+
       state.aiModelsLoaded = true;
-      if (DOM.aiStatusBadge) {
-        DOM.aiStatusBadge.className = 'ai-status-badge ready';
-        DOM.aiStatusBadge.innerHTML = '<i class="fa-solid fa-check-circle"></i> Neural Vision Ready';
-      }
+      setAiBadge('ready', '<i class="fa-solid fa-check-circle"></i> Neural Edge Vision Ready');
     } catch (err) {
-      console.warn('AI Vision neural loading note (using adaptive contour segmenter):', err);
-      if (DOM.aiStatusBadge) {
-        DOM.aiStatusBadge.className = 'ai-status-badge ready';
-        DOM.aiStatusBadge.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Adaptive Contour Ready';
+      console.error('MediaPipe vision models failed to load:', err);
+      state.aiModelsLoaded = false;
+      setAiBadge('error', '<i class="fa-solid fa-triangle-exclamation"></i> AI Offline – use Drag & Select ROI');
+    }
+  }
+
+  // Load models in background; segmentation awaits this promise.
+  const aiReadyPromise = initAIModels();
+
+  /* ---------- Low-level image-processing & edge-detection helpers ---------- */
+
+  function resampleBilinear(src, sw, sh, dw, dh) {
+    if (sw === dw && sh === dh) return src;
+    const out = new Float32Array(dw * dh);
+    const sx = sw / dw;
+    const sy = sh / dh;
+    for (let y = 0; y < dh; y++) {
+      const fy = Math.max(0, Math.min(sh - 1, (y + 0.5) * sy - 0.5));
+      const y0 = Math.floor(fy);
+      const y1 = Math.min(sh - 1, y0 + 1);
+      const wy = fy - y0;
+      for (let x = 0; x < dw; x++) {
+        const fx = Math.max(0, Math.min(sw - 1, (x + 0.5) * sx - 0.5));
+        const x0 = Math.floor(fx);
+        const x1 = Math.min(sw - 1, x0 + 1);
+        const wx = fx - x0;
+        const top = src[y0 * sw + x0] * (1 - wx) + src[y0 * sw + x1] * wx;
+        const bot = src[y1 * sw + x0] * (1 - wx) + src[y1 * sw + x1] * wx;
+        out[y * dw + x] = top * (1 - wy) + bot * wy;
+      }
+    }
+    return out;
+  }
+
+  function boxMean(src, w, h, r) {
+    if (r <= 0) return new Float32Array(src);
+    const tmp = new Float32Array(w * h);
+    const out = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      let sum = 0;
+      for (let x = 0; x <= Math.min(r, w - 1); x++) sum += src[row + x];
+      for (let x = 0; x < w; x++) {
+        const lo = Math.max(0, x - r);
+        const hi = Math.min(w - 1, x + r);
+        tmp[row + x] = sum / (hi - lo + 1);
+        if (x + r + 1 < w) sum += src[row + x + r + 1];
+        if (x - r >= 0) sum -= src[row + x - r];
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let y = 0; y <= Math.min(r, h - 1); y++) sum += tmp[y * w + x];
+      for (let y = 0; y < h; y++) {
+        const lo = Math.max(0, y - r);
+        const hi = Math.min(h - 1, y + r);
+        out[y * w + x] = sum / (hi - lo + 1);
+        if (y + r + 1 < h) sum += tmp[(y + r + 1) * w + x];
+        if (y - r >= 0) sum -= tmp[(y - r) * w + x];
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Multi-channel 3x3 Sobel Colour Edge Detector.
+   * Returns per-pixel gradient magnitude in [0, 1] across RGB channels.
+   */
+  function computeSobelEdges(rgb, w, h) {
+    const mag = new Float32Array(w * h);
+    let maxG = 1e-5;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i00 = ((y - 1) * w + (x - 1)) * 3;
+        const i01 = ((y - 1) * w + x) * 3;
+        const i02 = ((y - 1) * w + (x + 1)) * 3;
+        const i10 = (y * w + (x - 1)) * 3;
+        const i12 = (y * w + (x + 1)) * 3;
+        const i20 = ((y + 1) * w + (x - 1)) * 3;
+        const i21 = ((y + 1) * w + x) * 3;
+        const i22 = ((y + 1) * w + (x + 1)) * 3;
+
+        let g2 = 0;
+        for (let c = 0; c < 3; c++) {
+          const gx = -rgb[i00 + c] + rgb[i02 + c]
+                   - 2 * rgb[i10 + c] + 2 * rgb[i12 + c]
+                   - rgb[i20 + c] + rgb[i22 + c];
+          const gy = -rgb[i00 + c] - 2 * rgb[i01 + c] - rgb[i02 + c]
+                   + rgb[i20 + c] + 2 * rgb[i21 + c] + rgb[i22 + c];
+          g2 += gx * gx + gy * gy;
+        }
+        const g = Math.sqrt(g2);
+        mag[y * w + x] = g;
+        if (g > maxG) maxG = g;
+      }
+    }
+    const inv = 1 / maxG;
+    for (let i = 0; i < mag.length; i++) mag[i] = Math.min(1, mag[i] * inv);
+    return mag;
+  }
+
+  /**
+   * Colour Guided Filter (He, Sun & Tang, 2013).
+   */
+  function guidedFilterColor(I, w, h, p, r, eps) {
+    const n = w * h;
+    const Ir = new Float32Array(n);
+    const Ig = new Float32Array(n);
+    const Ib = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      Ir[i] = I[i * 3];
+      Ig[i] = I[i * 3 + 1];
+      Ib[i] = I[i * 3 + 2];
+    }
+
+    const prod = new Float32Array(n);
+    const meanOfProduct = (a, b) => {
+      for (let i = 0; i < n; i++) prod[i] = a[i] * b[i];
+      return boxMean(prod, w, h, r);
+    };
+
+    const mR = boxMean(Ir, w, h, r);
+    const mG = boxMean(Ig, w, h, r);
+    const mB = boxMean(Ib, w, h, r);
+    const mP = boxMean(p, w, h, r);
+    const mRP = meanOfProduct(Ir, p);
+    const mGP = meanOfProduct(Ig, p);
+    const mBP = meanOfProduct(Ib, p);
+    const vRR = meanOfProduct(Ir, Ir);
+    const vRG = meanOfProduct(Ir, Ig);
+    const vRB = meanOfProduct(Ir, Ib);
+    const vGG = meanOfProduct(Ig, Ig);
+    const vGB = meanOfProduct(Ig, Ib);
+    const vBB = meanOfProduct(Ib, Ib);
+
+    const aR = new Float32Array(n);
+    const aG = new Float32Array(n);
+    const aB = new Float32Array(n);
+    const bb = new Float32Array(n);
+
+    for (let i = 0; i < n; i++) {
+      const mr = mR[i], mg = mG[i], mb = mB[i], mp = mP[i];
+      const cR = mRP[i] - mr * mp;
+      const cG = mGP[i] - mg * mp;
+      const cB = mBP[i] - mb * mp;
+
+      const rr = vRR[i] - mr * mr + eps;
+      const rg = vRG[i] - mr * mg;
+      const rb = vRB[i] - mr * mb;
+      const gg = vGG[i] - mg * mg + eps;
+      const gb = vGB[i] - mg * mb;
+      const bl = vBB[i] - mb * mb + eps;
+
+      const i00 = gg * bl - gb * gb;
+      const i01 = gb * rb - rg * bl;
+      const i02 = rg * gb - gg * rb;
+      const i11 = rr * bl - rb * rb;
+      const i12 = rb * rg - rr * gb;
+      const i22 = rr * gg - rg * rg;
+      const det = rr * i00 + rg * i01 + rb * i02;
+      const invDet = det !== 0 ? 1 / det : 0;
+
+      const a0 = (cR * i00 + cG * i01 + cB * i02) * invDet;
+      const a1 = (cR * i01 + cG * i11 + cB * i12) * invDet;
+      const a2 = (cR * i02 + cG * i12 + cB * i22) * invDet;
+      aR[i] = a0;
+      aG[i] = a1;
+      aB[i] = a2;
+      bb[i] = mp - a0 * mr - a1 * mg - a2 * mb;
+    }
+
+    const maR = boxMean(aR, w, h, r);
+    const maG = boxMean(aG, w, h, r);
+    const maB = boxMean(aB, w, h, r);
+    const mbb = boxMean(bb, w, h, r);
+
+    const q = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      q[i] = maR[i] * Ir[i] + maG[i] * Ig[i] + maB[i] * Ib[i] + mbb[i];
+    }
+    return q;
+  }
+
+  /**
+   * True Edge-Detection Boundary Snapping:
+   * 1. Builds a boundary trimap band of radius `bandRadius` around the contour.
+   * 2. Estimates local Definite Foreground & Definite Background RGB colours
+   *    on either side of the contour and computes per-pixel RGB colour affinity.
+   * 3. Uses Sobel edge magnitude + Guided Filter (`eps = 2e-4`) so the 0.5
+   *    iso-contour snaps tightly onto the photo's real colour & gradient edges.
+   */
+  function refineAlphaWithEdges(rgb, sobel, w, h, coarse, opts = {}) {
+    const out = new Float32Array(w * h);
+    const baseR = opts.radius || Math.max(3, Math.min(10, Math.round(Math.max(w, h) / 160)));
+    const eps = opts.eps || 2e-4;
+
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (coarse[y * w + x] > 0.02) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < 0) return out;
+
+    const pad = baseR * 4;
+    minX = Math.max(0, minX - pad);
+    minY = Math.max(0, minY - pad);
+    maxX = Math.min(w - 1, maxX + pad);
+    maxY = Math.min(h - 1, maxY + pad);
+    const cw = maxX - minX + 1;
+    const ch = maxY - minY + 1;
+    const cn = cw * ch;
+
+    const cRGB = new Float32Array(cn * 3);
+    const cP = new Float32Array(cn);
+    const cSobel = new Float32Array(cn);
+    for (let y = 0; y < ch; y++) {
+      for (let x = 0; x < cw; x++) {
+        const gi = (y + minY) * w + (x + minX);
+        const ci = y * cw + x;
+        cP[ci] = coarse[gi];
+        cSobel[ci] = sobel[gi];
+        cRGB[ci * 3] = rgb[gi * 3];
+        cRGB[ci * 3 + 1] = rgb[gi * 3 + 1];
+        cRGB[ci * 3 + 2] = rgb[gi * 3 + 2];
+      }
+    }
+
+    // Smooth the prior slightly so hard polygon/mask borders have a genuine transition band
+    const smoothP = boxMean(cP, cw, ch, Math.max(2, Math.round(baseR * 0.6)));
+
+    // Estimate local foreground & background RGB colours in a neighbourhood of radius 2*baseR
+    const statR = baseR * 2;
+    const wFg = new Float32Array(cn);
+    const wBg = new Float32Array(cn);
+    const fgR = new Float32Array(cn), fgG = new Float32Array(cn), fgB = new Float32Array(cn);
+    const bgR = new Float32Array(cn), bgG = new Float32Array(cn), bgB = new Float32Array(cn);
+
+    for (let i = 0; i < cn; i++) {
+      const p = smoothP[i];
+      // Definite-ish foreground vs background weights
+      const wf = p > 0.55 ? (p - 0.55) / 0.45 : 0;
+      const wb = p < 0.45 ? (0.45 - p) / 0.45 : 0;
+      wFg[i] = wf;
+      wBg[i] = wb;
+      fgR[i] = wf * cRGB[i * 3];
+      fgG[i] = wf * cRGB[i * 3 + 1];
+      fgB[i] = wf * cRGB[i * 3 + 2];
+      bgR[i] = wb * cRGB[i * 3];
+      bgG[i] = wb * cRGB[i * 3 + 1];
+      bgB[i] = wb * cRGB[i * 3 + 2];
+    }
+
+    const mWf = boxMean(wFg, cw, ch, statR);
+    const mWb = boxMean(wBg, cw, ch, statR);
+    const mFgR = boxMean(fgR, cw, ch, statR);
+    const mFgG = boxMean(fgG, cw, ch, statR);
+    const mFgB = boxMean(fgB, cw, ch, statR);
+    const mBgR = boxMean(bgR, cw, ch, statR);
+    const mBgG = boxMean(bgG, cw, ch, statR);
+    const mBgB = boxMean(bgB, cw, ch, statR);
+
+    // Build edge-snapped prior inside the boundary band
+    const prior = new Float32Array(cn);
+    const band = new Uint8Array(cn);
+    for (let i = 0; i < cn; i++) {
+      const sp = smoothP[i];
+      if (sp > 0.03 && sp < 0.97 && mWf[i] > 1e-3 && mWb[i] > 1e-3) {
+        band[i] = 1;
+        const fr = mFgR[i] / mWf[i], fg = mFgG[i] / mWf[i], fb = mFgB[i] / mWf[i];
+        const br = mBgR[i] / mWb[i], bg = mBgG[i] / mWb[i], bb = mBgB[i] / mWb[i];
+        const r = cRGB[i * 3], g = cRGB[i * 3 + 1], b = cRGB[i * 3 + 2];
+
+        const dFg = (r - fr) * (r - fr) + (g - fg) * (g - fg) + (b - fb) * (b - fb);
+        const dBg = (r - br) * (r - br) + (g - bg) * (g - bg) + (b - bb) * (b - bb);
+        const sep = (fr - br) * (fr - br) + (fg - bg) * (fg - bg) + (fb - bb) * (fb - bb);
+
+        const colorAff = dBg / (dFg + dBg + 1e-4);
+        // Stronger local FG/BG contrast + Sobel gradient -> stronger snapping to colour edge
+        const edgeWeight = Math.min(0.82, Math.sqrt(sep) * 2.2 + cSobel[i] * 0.35);
+        prior[i] = (1 - edgeWeight) * sp + edgeWeight * colorAff;
+      } else {
+        prior[i] = cP[i];
+      }
+    }
+
+    // Two-stage guided filter (coarse radius then fine radius for crisp 1px edge locking)
+    const qCoarse = guidedFilterColor(cRGB, cw, ch, prior, baseR, eps);
+    const fineR = Math.max(2, Math.round(baseR * 0.45));
+    const qFine = guidedFilterColor(cRGB, cw, ch, qCoarse, fineR, eps * 0.5);
+
+    for (let y = 0; y < ch; y++) {
+      for (let x = 0; x < cw; x++) {
+        const ci = y * cw + x;
+        const gi = (y + minY) * w + (x + minX);
+        if (band[ci]) {
+          let v = Math.min(1, Math.max(0, qFine[ci]));
+          // Sharpen right across strong Sobel gradient peaks
+          if (cSobel[ci] > 0.12) {
+            v = 0.5 + (v - 0.5) * (1 + cSobel[ci] * 1.5);
+            v = Math.min(1, Math.max(0, v));
+          }
+          out[gi] = v;
+        } else {
+          out[gi] = cP[ci];
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Remove small foreground specks and fill small enclosed holes (4-connectivity).
+   */
+  function cleanupAlpha(alpha, w, h, minIslandPixels, maxHolePixels) {
+    const n = w * h;
+    const bin = new Uint8Array(n);
+    let fgCount = 0;
+    for (let i = 0; i < n; i++) {
+      if (alpha[i] >= 0.5) { bin[i] = 1; fgCount++; }
+    }
+    if (fgCount === 0) return;
+
+    const visited = new Uint8Array(n);
+    const stack = new Int32Array(n);
+    const comp = new Int32Array(n);
+
+    for (let start = 0; start < n; start++) {
+      if (visited[start]) continue;
+      const val = bin[start];
+      let sp = 0, cs = 0, touchesBorder = false;
+      stack[sp++] = start;
+      visited[start] = 1;
+
+      while (sp > 0) {
+        const p = stack[--sp];
+        comp[cs++] = p;
+        const x = p % w;
+        const y = (p - x) / w;
+        if (x === 0 || y === 0 || x === w - 1 || y === h - 1) touchesBorder = true;
+        if (x > 0 && !visited[p - 1] && bin[p - 1] === val) { visited[p - 1] = 1; stack[sp++] = p - 1; }
+        if (x < w - 1 && !visited[p + 1] && bin[p + 1] === val) { visited[p + 1] = 1; stack[sp++] = p + 1; }
+        if (y > 0 && !visited[p - w] && bin[p - w] === val) { visited[p - w] = 1; stack[sp++] = p - w; }
+        if (y < h - 1 && !visited[p + w] && bin[p + w] === val) { visited[p + w] = 1; stack[sp++] = p + w; }
+      }
+
+      if (val === 1 && cs < minIslandPixels) {
+        for (let k = 0; k < cs; k++) alpha[comp[k]] = 0;
+      } else if (val === 0 && !touchesBorder && cs < maxHolePixels) {
+        for (let k = 0; k < cs; k++) alpha[comp[k]] = 1;
       }
     }
   }
 
-  // Load models in background
-  initAIModels();
+  function alphaToFullResMask(alpha, w, h, W, H) {
+    const mask = new Uint8Array(W * H);
+    const full = resampleBilinear(alpha, w, h, W, H);
+    let count = 0, topX = Math.floor(W / 2), topY = -1;
+    for (let i = 0; i < W * H; i++) {
+      if (full[i] >= 0.5) {
+        mask[i] = 1;
+        count++;
+        if (topY < 0) { topY = Math.floor(i / W); topX = i % W; }
+      }
+    }
+    return { mask, count, topX, topY: Math.max(0, topY) };
+  }
+
+  function runSegmenter(source) {
+    return new Promise((resolve, reject) => {
+      try {
+        imageSegmenter.segment(source, (result) => {
+          try {
+            const masks = (result.confidenceMasks || []).map(m => ({
+              w: m.width,
+              h: m.height,
+              data: new Float32Array(m.getAsFloat32Array())
+            }));
+            resolve(masks);
+          } catch (e) {
+            reject(e);
+          }
+        });
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
 
   /**
-   * Run Neural Body & Face Contour Segmentation on Input Image
-   * Produces pixel-level boolean masks tracing exact body & face contours
+   * Run multiclass segmenter on a sub-crop of `sourceCanvas` and return
+   * resampled class maps for that crop rectangle.
    */
-  async function runAISegmentation(img) {
-    if (!img) return;
-    state.isAiDetecting = true;
+  async function segmentSubRect(sourceCanvas, rx, ry, rw, rh) {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 256;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(sourceCanvas, rx, ry, rw, rh, 0, 0, 256, 256);
+    const masks = await runSegmenter(c);
+    return masks.map(m => resampleBilinear(m.data, m.w, m.h, rw, rh));
+  }
 
-    if (DOM.aiStatusBadge) {
-      DOM.aiStatusBadge.className = 'ai-status-badge scanning';
-      DOM.aiStatusBadge.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Tracing Body & Face Contours...';
+  /**
+   * Multi-Scale + Tiled + Proposal Face Detection.
+   * Guarantees that all faces in group photos (e.g. 4+ people) are found,
+   * even when individual faces are small or off-centre.
+   */
+  function detectAllFacesMultiScale(workCanvas, w, h, faceSkinMap) {
+    const foundFaces = []; // each item: { landmarks: Array<{x,y,z}> | null, bbox: {x0,y0,x1,y1} }
+
+    function bboxFromLandmarks(lm) {
+      let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+      for (let i = 0; i < FACE_OVAL_IDX.length; i++) {
+        const pt = lm[FACE_OVAL_IDX[i]];
+        if (pt.x < x0) x0 = pt.x;
+        if (pt.x > x1) x1 = pt.x;
+        if (pt.y < y0) y0 = pt.y;
+        if (pt.y > y1) y1 = pt.y;
+      }
+      return { x0: x0 * w, y0: y0 * h, x1: x1 * w, y1: y1 * h };
     }
 
-    const W = img.width;
-    const H = img.height;
-    const totalPixels = W * H;
+    function iouOrOverlap(a, b) {
+      const ix0 = Math.max(a.x0, b.x0), iy0 = Math.max(a.y0, b.y0);
+      const ix1 = Math.min(a.x1, b.x1), iy1 = Math.min(a.y1, b.y1);
+      const iw = Math.max(0, ix1 - ix0), ih = Math.max(0, iy1 - iy0);
+      const inter = iw * ih;
+      const areaA = Math.max(1, (a.x1 - a.x0) * (a.y1 - a.y0));
+      const areaB = Math.max(1, (b.x1 - b.x0) * (b.y1 - b.y0));
+      const union = areaA + areaB - inter;
+      const minArea = Math.min(areaA, areaB);
+      const acx = (a.x0 + a.x1) * 0.5, acy = (a.y0 + a.y1) * 0.5;
+      const bcx = (b.x0 + b.x1) * 0.5, bcy = (b.y0 + b.y1) * 0.5;
+      const dist = Math.hypot(acx - bcx, acy - bcy);
+      const avgSize = 0.5 * (Math.hypot(a.x1 - a.x0, a.y1 - a.y0) + Math.hypot(b.x1 - b.x0, b.y1 - b.y0));
+      return (inter / union > 0.30) || (inter / minArea > 0.55) || (dist < avgSize * 0.35);
+    }
 
-    const bodyMask = new Uint8Array(totalPixels);
-    const faceMask = new Uint8Array(totalPixels);
-    const allMask = new Uint8Array(totalPixels);
-
-    let bodyPixels = 0;
-    let facePixels = 0;
-
-    let bodyTopX = Math.floor(W / 2);
-    let bodyTopY = Math.floor(H * 0.15);
-    let faceTopX = Math.floor(W / 2);
-    let faceTopY = Math.floor(H * 0.15);
-
-    let hasNeuralDetection = false;
-
-    // 1. Try BodyPix Pixel-Level Multi-Part Segmentation
-    if (bodyPixNet) {
-      try {
-        const partSeg = await bodyPixNet.segmentPersonParts(img, {
-          flipHorizontal: false,
-          internalResolution: 'medium',
-          segmentationThreshold: 0.60
-        });
-
-        if (partSeg && partSeg.data && partSeg.data.length > 0) {
-          const segW = partSeg.width;
-          const segH = partSeg.height;
-          const scaleX = segW / W;
-          const scaleY = segH / H;
-
-          let minBodyY = H;
-          let minFaceY = H;
-
-          for (let y = 0; y < H; y++) {
-            const sy = Math.min(segH - 1, Math.floor(y * scaleY));
-            for (let x = 0; x < W; x++) {
-              const sx = Math.min(segW - 1, Math.floor(x * scaleX));
-              const partId = partSeg.data[sy * segW + sx];
-              const idx = y * W + x;
-
-              if (partId >= 0) {
-                // Any person body part (0 to 23)
-                bodyMask[idx] = 1;
-                allMask[idx] = 1;
-                bodyPixels++;
-                if (y < minBodyY) {
-                  minBodyY = y;
-                  bodyTopX = x;
-                  bodyTopY = y;
-                }
-
-                // Face parts (0: left face, 1: right face)
-                if (partId === 0 || partId === 1) {
-                  faceMask[idx] = 1;
-                  facePixels++;
-                  if (y < minFaceY) {
-                    minFaceY = y;
-                    faceTopX = x;
-                    faceTopY = y;
-                  }
-                }
-              }
-            }
+    function addLandmarkFace(lm) {
+      const bbox = bboxFromLandmarks(lm);
+      const bw = bbox.x1 - bbox.x0, bh = bbox.y1 - bbox.y0;
+      if (bw < 12 || bh < 12) return;
+      for (let i = 0; i < foundFaces.length; i++) {
+        if (iouOrOverlap(foundFaces[i].bbox, bbox)) {
+          // Prefer a face with landmarks over a bbox-only detection
+          if (!foundFaces[i].landmarks && lm) {
+            foundFaces[i] = { landmarks: lm, bbox };
           }
-
-          if (bodyPixels > 50) {
-            hasNeuralDetection = true;
-          }
+          return;
         }
-      } catch (err) {
-        console.warn('BodyPix segmentation pass note:', err);
+      }
+      foundFaces.push({ landmarks: lm, bbox });
+    }
+
+    function runLandmarkerOnCrop(rx, ry, rw, rh, targetSize = 512) {
+      if (!faceLandmarker || rw < 16 || rh < 16) return;
+      const c = document.createElement('canvas');
+      c.width = targetSize;
+      c.height = targetSize;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(workCanvas, rx, ry, rw, rh, 0, 0, targetSize, targetSize);
+      try {
+        const res = faceLandmarker.detect(c);
+        const lms = (res && res.faceLandmarks) ? res.faceLandmarks : [];
+        lms.forEach(lm => {
+          // Ignore detections clipped right against the artificial crop border
+          let minX = 1, maxX = 0, minY = 1, maxY = 0;
+          FACE_OVAL_IDX.forEach(idx => {
+            const p = lm[idx];
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+          });
+          const touchesLeft = rx > 2 && minX < 0.015;
+          const touchesRight = (rx + rw < w - 2) && maxX > 0.985;
+          const touchesTop = ry > 2 && minY < 0.015;
+          const touchesBot = (ry + rh < h - 2) && maxY > 0.985;
+          if (touchesLeft || touchesRight || touchesTop || touchesBot) return;
+
+          const mapped = lm.map(pt => ({
+            x: (rx + pt.x * rw) / w,
+            y: (ry + pt.y * rh) / h,
+            z: pt.z
+          }));
+          addLandmarkFace(mapped);
+        });
+      } catch (e) {
+        // ignore single-crop error
       }
     }
 
-    // 2. Try BlazeFace Neural Facial Contour Refinement
-    if (blazeFaceModel) {
+    // 1. Full-frame FaceLandmarker pass
+    if (faceLandmarker) {
       try {
-        const faces = await blazeFaceModel.estimateFaces(img, false);
-        if (faces && faces.length > 0) {
-          faces.forEach(f => {
-            const start = f.topLeft;
-            const end = f.bottomRight;
-            const fw = end[0] - start[0];
-            const fh = end[1] - start[1];
-            const cx = (start[0] + end[0]) / 2;
-            const cy = (start[1] + end[1]) / 2;
-            const rx = fw * 0.54;
-            const ry = fh * 0.62;
+        const res = faceLandmarker.detect(workCanvas);
+        ((res && res.faceLandmarks) || []).forEach(lm => addLandmarkFace(lm));
+      } catch (e) {
+        console.warn('Full-frame FaceLandmarker failed:', e);
+      }
+    }
 
-            const minX = Math.max(0, Math.floor(cx - rx));
-            const maxX = Math.min(W - 1, Math.ceil(cx + rx));
-            const minY = Math.max(0, Math.floor(cy - ry));
-            const maxY = Math.min(H - 1, Math.ceil(cy + ry));
+    // 2. Overlapping tiled passes (magnifies smaller/group-photo faces by ~2x)
+    const tiles = [
+      [0, 0, w * 0.62, h * 0.75],
+      [w * 0.19, 0, w * 0.62, h * 0.75],
+      [w * 0.38, 0, w * 0.62, h * 0.75],
+      [0, h * 0.15, w * 0.58, h * 0.85],
+      [w * 0.42, h * 0.15, w * 0.58, h * 0.85]
+    ];
+    tiles.forEach(([tx, ty, tw, th]) => {
+      runLandmarkerOnCrop(Math.round(tx), Math.round(ty), Math.round(tw), Math.round(th), 512);
+    });
 
-            faceTopX = Math.floor(cx);
-            faceTopY = minY;
-
-            for (let py = minY; py <= maxY; py++) {
-              for (let px = minX; px <= maxX; px++) {
-                const dx = (px - cx) / rx;
-                const dy = (py - cy) / ry;
-                if (dx * dx + dy * dy <= 1.0) {
-                  const idx = py * W + px;
-                  if (faceMask[idx] === 0) {
-                    faceMask[idx] = 1;
-                    facePixels++;
-                  }
-                  if (bodyMask[idx] === 0) {
-                    bodyMask[idx] = 1;
-                    bodyPixels++;
-                  }
-                  allMask[idx] = 1;
-                }
+    // 3. BlazeFace detector pass (full + left/right halves) -> refine each box with FaceLandmarker crop
+    if (faceDetector) {
+      const detCrops = [
+        [0, 0, w, h],
+        [0, 0, Math.round(w * 0.6), h],
+        [Math.round(w * 0.4), 0, Math.round(w * 0.6), h]
+      ];
+      detCrops.forEach(([dx, dy, dw, dh]) => {
+        try {
+          const c = document.createElement('canvas');
+          c.width = dw;
+          c.height = dh;
+          c.getContext('2d').drawImage(workCanvas, dx, dy, dw, dh, 0, 0, dw, dh);
+          const detRes = faceDetector.detect(c);
+          ((detRes && detRes.detections) || []).forEach(det => {
+            const bb = det.boundingBox;
+            if (!bb) return;
+            const bx0 = dx + bb.originX;
+            const by0 = dy + bb.originY;
+            const bw = bb.width;
+            const bh = bb.height;
+            const candBox = { x0: bx0, y0: by0, x1: bx0 + bw, y1: by0 + bh };
+            const already = foundFaces.some(f => iouOrOverlap(f.bbox, candBox));
+            if (!already) {
+              const pad = Math.max(bw, bh) * 0.85;
+              const cx0 = Math.max(0, Math.floor(bx0 - pad));
+              const cy0 = Math.max(0, Math.floor(by0 - pad));
+              const cx1 = Math.min(w, Math.ceil(bx0 + bw + pad));
+              const cy1 = Math.min(h, Math.ceil(by0 + bh + pad));
+              const beforeCount = foundFaces.length;
+              runLandmarkerOnCrop(cx0, cy0, cx1 - cx0, cy1 - cy0, 384);
+              if (foundFaces.length === beforeCount) {
+                foundFaces.push({ landmarks: null, bbox: candBox });
               }
             }
           });
-          hasNeuralDetection = true;
+        } catch (e) {
+          // ignore
         }
-      } catch (err) {
-        console.warn('BlazeFace pass note:', err);
-      }
+      });
     }
 
-    // 3. Fallback Adaptive Color-Saliency Contour Segmenter
-    // Traces human skin & foreground silhouette if neural network is offline
-    if (!hasNeuralDetection || bodyPixels < 100) {
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = W;
-      tempCanvas.height = H;
-      const tCtx = tempCanvas.getContext('2d');
-      tCtx.drawImage(img, 0, 0);
-      const rawData = tCtx.getImageData(0, 0, W, H).data;
+    // 4. Connected-component proposals from neural `faceSkinMap` (class 3)
+    // Catches any remaining face that neural segmentation saw as face-skin!
+    if (faceSkinMap) {
+      const n = w * h;
+      const visited = new Uint8Array(n);
+      const stack = new Int32Array(n);
+      const minCluster = Math.max(35, Math.round(n * 0.00035));
 
-      // Extract foreground saliency & skin chrominance (YCbCr)
-      let minBY = H;
-      let minFY = H;
+      for (let start = 0; start < n; start++) {
+        if (visited[start] || faceSkinMap[start] < 0.25) continue;
+        let sp = 0, count = 0;
+        let x0 = w, y0 = h, x1 = 0, y1 = 0;
+        stack[sp++] = start;
+        visited[start] = 1;
 
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const idx = y * W + x;
-          const pIdx = idx * 4;
-          const r = rawData[pIdx];
-          const g = rawData[pIdx + 1];
-          const b = rawData[pIdx + 2];
+        while (sp > 0) {
+          const p = stack[--sp];
+          count++;
+          const x = p % w;
+          const y = (p - x) / w;
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          if (y < y0) y0 = y;
+          if (y > y1) y1 = y;
 
-          // YCbCr skin & torso chrominance detection
-          const Y = 0.299 * r + 0.587 * g + 0.114 * b;
-          const Cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
-          const Cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+          if (x > 0 && !visited[p - 1] && faceSkinMap[p - 1] >= 0.25) { visited[p - 1] = 1; stack[sp++] = p - 1; }
+          if (x < w - 1 && !visited[p + 1] && faceSkinMap[p + 1] >= 0.25) { visited[p + 1] = 1; stack[sp++] = p + 1; }
+          if (y > 0 && !visited[p - w] && faceSkinMap[p - w] >= 0.25) { visited[p - w] = 1; stack[sp++] = p - w; }
+          if (y < h - 1 && !visited[p + w] && faceSkinMap[p + w] >= 0.25) { visited[p + w] = 1; stack[sp++] = p + w; }
+        }
 
-          const isSkin = (Cb >= 77 && Cb <= 127 && Cr >= 133 && Cr <= 173 && r > g && g > b && (r - g) >= 15);
-          
-          // Foreground silhouette central proximity
-          const cxNorm = (x - W / 2) / (W * 0.45);
-          const cyNorm = (y - H * 0.45) / (H * 0.48);
-          const isCenterBody = (cxNorm * cxNorm + cyNorm * cyNorm <= 1.0) && (Y > 20 && Y < 240);
-
-          if (isSkin) {
-            faceMask[idx] = 1;
-            facePixels++;
-            if (y < minFY) {
-              minFY = y;
-              faceTopX = x;
-              faceTopY = y;
-            }
-          }
-
-          if (isSkin || (isCenterBody && Math.abs(r - g) > 8)) {
-            bodyMask[idx] = 1;
-            allMask[idx] = 1;
-            bodyPixels++;
-            if (y < minBY) {
-              minBY = y;
-              bodyTopX = x;
-              bodyTopY = y;
+        const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+        const aspect = bh / Math.max(1, bw);
+        if (count >= minCluster && aspect > 0.4 && aspect < 2.8) {
+          const candBox = { x0, y0, x1, y1 };
+          const covered = foundFaces.some(f => iouOrOverlap(f.bbox, candBox));
+          if (!covered) {
+            const pad = Math.max(bw, bh) * 0.9;
+            const cx0 = Math.max(0, Math.floor(x0 - pad));
+            const cy0 = Math.max(0, Math.floor(y0 - pad));
+            const cx1 = Math.min(w, Math.ceil(x1 + pad));
+            const cy1 = Math.min(h, Math.ceil(y1 + pad));
+            const beforeCount = foundFaces.length;
+            runLandmarkerOnCrop(cx0, cy0, cx1 - cx0, cy1 - cy0, 384);
+            if (foundFaces.length === beforeCount) {
+              // Keep as a skin-segmented face even if landmarks didn't trigger
+              foundFaces.push({ landmarks: null, bbox: candBox });
             }
           }
         }
       }
     }
 
-    // Compute shape statistics
-    const bodyPct = parseFloat(((bodyPixels / totalPixels) * 100).toFixed(1));
-    const facePct = parseFloat(((facePixels / totalPixels) * 100).toFixed(1));
+    // Sort faces left-to-right for consistent numbering
+    foundFaces.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    return foundFaces;
+  }
 
-    state.bodyMask = bodyMask;
-    state.faceMask = faceMask;
-    state.allMask = allMask;
-    state.detectedBodyStats = { pixelCount: bodyPixels, coveragePct: bodyPct, topX: bodyTopX, topY: bodyTopY };
-    state.detectedFaceStats = { pixelCount: facePixels, coveragePct: facePct, topX: faceTopX, topY: faceTopY };
-    state.isAiDetecting = false;
+  /**
+   * Draw a smooth closed Catmull-Rom spline curve through `points` ([{x,y}, ...]).
+   */
+  function fillSmoothPolygon(ctx, points) {
+    const k = points.length;
+    if (k < 3) return;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 0; i < k; i++) {
+      const p0 = points[(i - 1 + k) % k];
+      const p1 = points[i];
+      const p2 = points[(i + 1) % k];
+      const p3 = points[(i + 2) % k];
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = p1.y + (p2.y - p0.y) / 6;
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
 
-    // Update UI Badges & Subtexts
+  function updateAiResultUI(bodyPixels, facePixels, bodyPct, facePct, faceCount, aiAvailable) {
     if (DOM.subPersonCount) {
-      DOM.subPersonCount.textContent = bodyPixels > 0 ? `Traced (${bodyPct}%)` : 'No body shape';
+      DOM.subPersonCount.textContent = !aiAvailable ? 'AI unavailable' : (bodyPixels > 0 ? `Traced (${bodyPct}%)` : 'No person found');
     }
     if (DOM.subFaceCount) {
-      DOM.subFaceCount.textContent = facePixels > 0 ? `Traced (${facePct}%)` : 'No face shape';
+      if (!aiAvailable) {
+        DOM.subFaceCount.textContent = 'AI unavailable';
+      } else if (facePixels > 0) {
+        const fLabel = faceCount > 1 ? `${faceCount} faces` : '1 face';
+        DOM.subFaceCount.textContent = `${fLabel} (${facePct}%)`;
+      } else {
+        DOM.subFaceCount.textContent = 'No face found';
+      }
     }
-
-    if (DOM.aiStatusBadge) {
-      DOM.aiStatusBadge.className = 'ai-status-badge ready';
-      DOM.aiStatusBadge.innerHTML = `<i class="fa-solid fa-circle-check"></i> Analysis Ready`;
-    }
-
     if (DOM.aiDetectionBanner) {
       DOM.aiDetectionBanner.style.display = 'flex';
       if (bodyPixels > 0 || facePixels > 0) {
-        DOM.aiDetectionText.innerHTML = `<i class="fa-solid fa-shapes"></i> <b>Person Contours Detected:</b> Body (${bodyPct}%) and Face (${facePct}%). Or use <b>Drag & Select ROI</b> for custom area.`;
+        const fText = faceCount > 0 ? `${faceCount} ${faceCount === 1 ? 'Face' : 'Faces'} (${facePct}%)` : `Face (${facePct}%)`;
+        DOM.aiDetectionText.innerHTML = `<i class="fa-solid fa-shapes"></i> <b>Edge-Refined Human Contour:</b> Body (${bodyPct}%) &amp; ${fText}. Or use <b>Drag &amp; Select ROI</b>.`;
+      } else if (!aiAvailable) {
+        DOM.aiDetectionText.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> <b>AI models could not be loaded</b> (internet connection required). Use <b>Drag &amp; Select ROI</b> or <b>Entire Image</b>.`;
       } else {
-        DOM.aiDetectionText.innerHTML = `<i class="fa-solid fa-crosshairs"></i> <b>Custom Selection Ready:</b> Drag directly on the image to select any area to encrypt, or choose <b>Entire Image</b>.`;
+        DOM.aiDetectionText.innerHTML = `<i class="fa-solid fa-crosshairs"></i> <b>No person detected.</b> Drag directly on the image to select any area to encrypt, or choose <b>Entire Image</b>.`;
       }
+    }
+  }
+
+  /**
+   * Run AI Human Segmentation + Multi-Face Detection + Edge-Detection Refinement.
+   */
+  async function runAISegmentation(img) {
+    if (!img) return;
+    const token = ++state.segToken;
+    state.isAiDetecting = true;
+    state.bodyMask = null;
+    state.faceMask = null;
+    state.allMask = null;
+    state.detectedFaces = [];
+    state.detectedBodyStats = { pixelCount: 0, coveragePct: 0, topX: 0, topY: 0 };
+    state.detectedFaceStats = { pixelCount: 0, coveragePct: 0, topX: 0, topY: 0, count: 0 };
+    if (DOM.subPersonCount) DOM.subPersonCount.textContent = 'Tracing…';
+    if (DOM.subFaceCount) DOM.subFaceCount.textContent = 'Tracing…';
+
+    setAiBadge('scanning', '<i class="fa-solid fa-circle-notch fa-spin"></i> ' +
+      (state.aiModelsLoaded ? 'Detecting Faces & Edges...' : 'Loading Neural Vision...'));
+
+    await aiReadyPromise;
+    if (token !== state.segToken) return;
+
+    if (!imageSegmenter) {
+      state.isAiDetecting = false;
+      setAiBadge('error', '<i class="fa-solid fa-triangle-exclamation"></i> AI Offline – use Drag & Select ROI');
+      updateAiResultUI(0, 0, 0, 0, 0, false);
+      renderEncOriginalWithOverlays();
+      return;
+    }
+
+    setAiBadge('scanning', '<i class="fa-solid fa-circle-notch fa-spin"></i> Tracing Human & Face Edges...');
+    await new Promise(r => setTimeout(r, 30));
+
+    const W = img.width;
+    const H = img.height;
+    const scale = Math.min(1, SEG_WORK_MAX / Math.max(W, H));
+    const w = Math.max(1, Math.round(W * scale));
+    const h = Math.max(1, Math.round(H * scale));
+    const n = w * h;
+
+    try {
+      const workCanvas = document.createElement('canvas');
+      workCanvas.width = w;
+      workCanvas.height = h;
+      const wctx = workCanvas.getContext('2d', { willReadFrequently: true });
+      wctx.drawImage(img, 0, 0, w, h);
+      const rgba = wctx.getImageData(0, 0, w, h).data;
+      const rgb = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        rgb[i * 3] = rgba[i * 4] / 255;
+        rgb[i * 3 + 1] = rgba[i * 4 + 1] / 255;
+        rgb[i * 3 + 2] = rgba[i * 4 + 2] / 255;
+      }
+
+      // Compute Sobel colour edge map for true edge snapping
+      const sobel = computeSobelEdges(rgb, w, h);
+
+      // 1. Full-frame + Tiled High-Res Multiclass Person Segmentation
+      const masks = await runSegmenter(workCanvas);
+      if (token !== state.segToken) return;
+      if (!masks.length) throw new Error('Segmenter returned no masks');
+
+      const numClasses = masks.length;
+      const classMaps = masks.map(m => resampleBilinear(m.data, m.w, m.h, w, h));
+
+      // Fuse overlapping left/right high-res tiles so group photos get 2x higher neural resolution
+      if (w >= 320 && numClasses >= 4) {
+        const tileW = Math.round(w * 0.62);
+        const tileRects = [
+          [0, 0, tileW, h],
+          [w - tileW, 0, tileW, h]
+        ];
+        const accum = Array.from({ length: numClasses }, () => new Float32Array(n));
+        const weightSum = new Float32Array(n);
+        for (let c = 0; c < numClasses; c++) {
+          accum[c].set(classMaps[c]);
+        }
+        weightSum.fill(1.0);
+
+        for (const [rx, ry, rw, rh] of tileRects) {
+          const subMaps = await segmentSubRect(workCanvas, rx, ry, rw, rh);
+          if (token !== state.segToken) return;
+          for (let y = 0; y < rh; y++) {
+            const wy = 1 - 0.5 * Math.pow((y - rh * 0.5) / (rh * 0.5), 2);
+            for (let x = 0; x < rw; x++) {
+              const wx = 1 - 0.5 * Math.pow((x - rw * 0.5) / (rw * 0.5), 2);
+              const wt = Math.max(0.2, wx * wy) * 1.6;
+              const gi = (ry + y) * w + (rx + x);
+              const si = y * rw + x;
+              for (let c = 0; c < numClasses; c++) {
+                accum[c][gi] += subMaps[c][si] * wt;
+              }
+              weightSum[gi] += wt;
+            }
+          }
+        }
+        for (let c = 0; c < numClasses; c++) {
+          const dst = classMaps[c];
+          const src = accum[c];
+          for (let i = 0; i < n; i++) dst[i] = src[i] / weightSum[i];
+        }
+      }
+
+      const bgConf = classMaps[0];
+      const hairConf = numClasses >= 2 ? classMaps[1] : new Float32Array(n);
+      const bodySkinConf = numClasses >= 3 ? classMaps[2] : new Float32Array(n);
+      const faceSkinConf = numClasses >= 4 ? classMaps[3] : null;
+      const clothesConf = numClasses >= 5 ? classMaps[4] : new Float32Array(n);
+      const accConf = numClasses >= 6 ? classMaps[5] : new Float32Array(n);
+
+      const bodyCoarse = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        bodyCoarse[i] = numClasses >= 2 ? Math.min(1, Math.max(0, 1 - bgConf[i])) : bgConf[i];
+      }
+
+      // 2. Multi-scale + Tiled + Skin-Proposal Face Detection (finds all 4+ faces)
+      const detectedFaces = detectAllFacesMultiScale(workCanvas, w, h, faceSkinConf);
+      if (token !== state.segToken) return;
+
+      // 3. Per-Face High-Resolution Segmentation + Anatomical Landmark Fusion
+      const faceCoarse = new Float32Array(n);
+
+      for (let fIdx = 0; fIdx < detectedFaces.length; fIdx++) {
+        const face = detectedFaces[fIdx];
+        const { bbox, landmarks } = face;
+        const fw = Math.max(16, bbox.x1 - bbox.x0);
+        const fh = Math.max(16, bbox.y1 - bbox.y0);
+
+        // Extract a padded crop around this single face and segment it at full 256x256 resolution
+        const padX = Math.round(fw * 0.45);
+        const padY = Math.round(fh * 0.50);
+        const rx = Math.max(0, Math.floor(bbox.x0 - padX));
+        const ry = Math.max(0, Math.floor(bbox.y0 - padY));
+        const rw = Math.min(w - rx, Math.ceil(bbox.x1 - bbox.x0 + padX * 2));
+        const rh = Math.min(h - ry, Math.ceil(bbox.y1 - bbox.y0 + padY * 2));
+
+        let localMasks = null;
+        if (rw >= 20 && rh >= 20) {
+          try {
+            localMasks = await segmentSubRect(workCanvas, rx, ry, rw, rh);
+          } catch (e) {
+            localMasks = null;
+          }
+        }
+        if (token !== state.segToken) return;
+
+        // Blend high-res local face segmentation into global class maps as well
+        if (localMasks && localMasks.length >= 4) {
+          for (let y = 0; y < rh; y++) {
+            for (let x = 0; x < rw; x++) {
+              const gi = (ry + y) * w + (rx + x);
+              const li = y * rw + x;
+              const lBg = localMasks[0][li];
+              const lPerson = Math.min(1, Math.max(0, 1 - lBg));
+              if (lPerson > bodyCoarse[gi]) bodyCoarse[gi] = 0.4 * bodyCoarse[gi] + 0.6 * lPerson;
+            }
+          }
+        }
+
+        if (landmarks) {
+          // Compute face centre
+          const cx = (bbox.x0 + bbox.x1) * 0.5 - rx;
+          const cy = (bbox.y0 + bbox.y1) * 0.5 - ry;
+
+          // A) Outer anatomical face envelope (smooth spline through FACE_OVAL_IDX,
+          //    expanded slightly at forehead so hairline can be carved by neural hair mask,
+          //    and tight along the chin/jawline so neck skin is excluded).
+          const outerPts = FACE_OVAL_IDX.map(idx => {
+            const pt = landmarks[idx];
+            const px = pt.x * w - rx;
+            const py = pt.y * h - ry;
+            const dx = px - cx;
+            const dy = py - cy;
+            const isForehead = FOREHEAD_SET.has(idx);
+            const scaleX = isForehead ? 1.08 : 1.03;
+            const scaleY = isForehead ? 1.16 : 1.01;
+            return { x: cx + dx * scaleX, y: cy + dy * scaleY };
+          });
+
+          // B) Inner facial features core (inset spline covering brows, eyes, nose, mouth)
+          const innerPts = FACE_OVAL_IDX.map(idx => {
+            const pt = landmarks[idx];
+            const px = pt.x * w - rx;
+            const py = pt.y * h - ry;
+            return { x: cx + (px - cx) * 0.76, y: cy + (py - cy) * 0.76 };
+          });
+
+          const cOuter = document.createElement('canvas');
+          cOuter.width = rw;
+          cOuter.height = rh;
+          const ctxOut = cOuter.getContext('2d');
+          ctxOut.fillStyle = '#ffffff';
+          fillSmoothPolygon(ctxOut, outerPts);
+          const outerAlphaRaw = ctxOut.getImageData(0, 0, rw, rh).data;
+
+          const cInner = document.createElement('canvas');
+          cInner.width = rw;
+          cInner.height = rh;
+          const ctxIn = cInner.getContext('2d');
+          ctxIn.fillStyle = '#ffffff';
+          fillSmoothPolygon(ctxIn, innerPts);
+          const innerAlphaRaw = ctxIn.getImageData(0, 0, rw, rh).data;
+
+          const outerFloat = new Float32Array(rw * rh);
+          const innerFloat = new Float32Array(rw * rh);
+          for (let i = 0; i < rw * rh; i++) {
+            outerFloat[i] = outerAlphaRaw[i * 4 + 3] / 255;
+            innerFloat[i] = innerAlphaRaw[i * 4 + 3] / 255;
+          }
+
+          // Feather the outer anatomical boundary so guided filter & neural skin mask
+          // snap the contour onto the true jawline / cheek / hairline edges
+          const featherR = Math.max(2, Math.round(Math.min(fw, fh) * 0.055));
+          const outerSmooth = boxMean(outerFloat, rw, rh, featherR);
+          const innerSmooth = boxMean(innerFloat, rw, rh, Math.max(1, Math.round(featherR * 0.5)));
+
+          for (let y = 0; y < rh; y++) {
+            for (let x = 0; x < rw; x++) {
+              const li = y * rw + x;
+              const env = outerSmooth[li];
+              if (env < 0.02) continue;
+
+              const gi = (ry + y) * w + (rx + x);
+              const pBg = localMasks ? localMasks[0][li] : bgConf[gi];
+              const pHair = (localMasks && localMasks[1]) ? localMasks[1][li] : hairConf[gi];
+              const pBody = (localMasks && localMasks[2]) ? localMasks[2][li] : bodySkinConf[gi];
+              const pFace = (localMasks && localMasks[3]) ? localMasks[3][li] : (faceSkinConf ? faceSkinConf[gi] : 0.5);
+              const pClothes = (localMasks && localMasks[4]) ? localMasks[4][li] : clothesConf[gi];
+              const pAcc = (localMasks && localMasks[5]) ? localMasks[5][li] : accConf[gi];
+
+              // Neural probability that pixel is face (vs hair, background, clothes, or neck)
+              const fgFace = pFace + 0.35 * pAcc;
+              const nonFace = pBg + pHair * 1.15 + pClothes + pBody * 0.55;
+              const neuralFaceProb = fgFace / (fgFace + nonFace + 1e-4);
+
+              // Combine inner core (protects eyes/brows/mouth) with neural skin boundary & anatomical jawline
+              const core = innerSmooth[li] * (1 - Math.min(0.85, pHair + pBg));
+              const combined = env * (0.68 * neuralFaceProb + 0.32 * env);
+              const val = Math.min(1, Math.max(core * 0.92, combined));
+              if (val > faceCoarse[gi]) faceCoarse[gi] = val;
+            }
+          }
+        } else {
+          // Fallback for a face without landmarks (e.g., extreme profile): use high-res neural face-skin mask
+          for (let y = 0; y < rh; y++) {
+            for (let x = 0; x < rw; x++) {
+              const li = y * rw + x;
+              const gi = (ry + y) * w + (rx + x);
+              const pBg = localMasks ? localMasks[0][li] : bgConf[gi];
+              const pHair = (localMasks && localMasks[1]) ? localMasks[1][li] : hairConf[gi];
+              const pFace = (localMasks && localMasks[3]) ? localMasks[3][li] : (faceSkinConf ? faceSkinConf[gi] : 0);
+              const pAcc = (localMasks && localMasks[5]) ? localMasks[5][li] : accConf[gi];
+              const prob = (pFace + 0.25 * pAcc) / (pFace + 0.25 * pAcc + pBg + pHair + 1e-4);
+              const val = pFace > 0.15 ? prob : 0;
+              if (val > faceCoarse[gi]) faceCoarse[gi] = val;
+            }
+          }
+        }
+      }
+
+      if (token !== state.segToken) return;
+
+      // 4. Edge-Detection Boundary Snapping (Sobel + Local FG/BG Colour Affinity + Guided Filter)
+      const bodyRadius = Math.max(4, Math.min(10, Math.round(Math.max(w, h) / 150)));
+      const bodyAlpha = refineAlphaWithEdges(rgb, sobel, w, h, bodyCoarse, { radius: bodyRadius, eps: 2e-4 });
+      cleanupAlpha(bodyAlpha, w, h, Math.max(40, Math.round(n * 0.001)), Math.max(40, Math.round(n * 0.0015)));
+
+      let faceAlpha = null;
+      if (detectedFaces.length > 0) {
+        const faceRadius = Math.max(3, Math.min(7, Math.round(Math.max(w, h) / 210)));
+        faceAlpha = refineAlphaWithEdges(rgb, sobel, w, h, faceCoarse, { radius: faceRadius, eps: 1.5e-4 });
+        // Keep each face (even small ones in group photos) while filling internal eye/brow/mouth holes
+        cleanupAlpha(faceAlpha, w, h, 25, Math.max(80, Math.round(n * 0.002)));
+        for (let i = 0; i < n; i++) {
+          if (faceAlpha[i] > bodyAlpha[i]) bodyAlpha[i] = faceAlpha[i];
+        }
+      }
+
+      if (token !== state.segToken) return;
+
+      // 5. Upscale to full image resolution (W x H)
+      const totalPixels = W * H;
+      const body = alphaToFullResMask(bodyAlpha, w, h, W, H);
+      const face = faceAlpha
+        ? alphaToFullResMask(faceAlpha, w, h, W, H)
+        : { mask: new Uint8Array(totalPixels), count: 0, topX: 0, topY: 0 };
+
+      // Compute per-face top coordinates in full-res pixels for canvas badges
+      const invScaleX = W / w;
+      const invScaleY = H / h;
+      const faceBoxesFull = detectedFaces.map((f, idx) => ({
+        index: idx + 1,
+        cx: Math.round(((f.bbox.x0 + f.bbox.x1) * 0.5) * invScaleX),
+        topY: Math.round(f.bbox.y0 * invScaleY),
+        x0: Math.round(f.bbox.x0 * invScaleX),
+        y0: Math.round(f.bbox.y0 * invScaleY),
+        x1: Math.round(f.bbox.x1 * invScaleX),
+        y1: Math.round(f.bbox.y1 * invScaleY)
+      }));
+
+      const minBody = totalPixels * 0.0015;
+      const bodyPixels = body.count >= minBody ? body.count : 0;
+      const facePixels = face.count >= 35 ? face.count : 0;
+
+      const bodyPct = parseFloat(((bodyPixels / totalPixels) * 100).toFixed(1));
+      const facePct = parseFloat(((facePixels / totalPixels) * 100).toFixed(1));
+
+      state.bodyMask = bodyPixels > 0 ? body.mask : null;
+      state.faceMask = facePixels > 0 ? face.mask : null;
+      state.allMask = state.bodyMask;
+      state.detectedFaces = facePixels > 0 ? faceBoxesFull : [];
+      state.detectedBodyStats = { pixelCount: bodyPixels, coveragePct: bodyPct, topX: body.topX, topY: body.topY };
+      state.detectedFaceStats = {
+        pixelCount: facePixels,
+        coveragePct: facePct,
+        topX: faceBoxesFull.length > 0 ? faceBoxesFull[0].cx : face.topX,
+        topY: faceBoxesFull.length > 0 ? faceBoxesFull[0].topY : face.topY,
+        count: facePixels > 0 ? Math.max(1, faceBoxesFull.length) : 0
+      };
+
+      setAiBadge('ready', '<i class="fa-solid fa-circle-check"></i> Edge-Refined Analysis Ready');
+      updateAiResultUI(bodyPixels, facePixels, bodyPct, facePct, state.detectedFaceStats.count, true);
+    } catch (err) {
+      console.error('AI segmentation failed:', err);
+      setAiBadge('warning', '<i class="fa-solid fa-triangle-exclamation"></i> Detection failed – use Drag & Select ROI');
+      updateAiResultUI(0, 0, 0, 0, 0, true);
+    } finally {
+      if (token === state.segToken) state.isAiDetecting = false;
     }
 
     renderEncOriginalWithOverlays();
@@ -1010,6 +1854,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const H = canvas.height;
 
     const scale = Math.max(1, W / 900);
+    const t = Math.max(1, Math.round(scale * 1.5)); // contour line thickness in image pixels
     const scope = state.encScope;
 
     // 1. Entire Image Scope
@@ -1091,9 +1936,9 @@ document.addEventListener('DOMContentLoaded', () => {
           if (mask[idx] === 1) {
             const bufIdx = idx * 4;
             const isEdge = (
-              x === 0 || x === W - 1 || y === 0 || y === H - 1 ||
-              mask[idx - 1] === 0 || mask[idx + 1] === 0 ||
-              mask[idx - W] === 0 || mask[idx + W] === 0
+              x < t || x >= W - t || y < t || y >= H - t ||
+              mask[idx - t] === 0 || mask[idx + t] === 0 ||
+              mask[idx - t * W] === 0 || mask[idx + t * W] === 0
             );
 
             if (isEdge) {
@@ -1120,9 +1965,9 @@ document.addEventListener('DOMContentLoaded', () => {
           if (mask[idx] === 1) {
             const bufIdx = idx * 4;
             const isEdge = (
-              x === 0 || x === W - 1 || y === 0 || y === H - 1 ||
-              mask[idx - 1] === 0 || mask[idx + 1] === 0 ||
-              mask[idx - W] === 0 || mask[idx + W] === 0
+              x < t || x >= W - t || y < t || y >= H - t ||
+              mask[idx - t] === 0 || mask[idx + t] === 0 ||
+              mask[idx - t * W] === 0 || mask[idx + t * W] === 0
             );
 
             if (isEdge) {
@@ -1170,19 +2015,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (showFace && state.detectedFaceStats.pixelCount > 0) {
-      const text = `😀 Face Contour (${state.detectedFaceStats.coveragePct}%)`;
-      const textW = ctx.measureText(text).width;
-      const fx = Math.max(10, Math.min(W - textW - 24, state.detectedFaceStats.topX - textW / 2));
-      const fy = Math.max(10, state.detectedFaceStats.topY - pillH - 6);
+      const faces = Array.isArray(state.detectedFaces) && state.detectedFaces.length > 0
+        ? state.detectedFaces
+        : [{ index: 1, cx: state.detectedFaceStats.topX, topY: state.detectedFaceStats.topY }];
 
-      ctx.save();
-      ctx.fillStyle = '#059669';
-      ctx.beginPath();
-      ctx.roundRect ? ctx.roundRect(fx, fy, textW + 20, pillH, 6) : ctx.rect(fx, fy, textW + 20, pillH);
-      ctx.fill();
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(text, fx + 10, fy + fontSize + 4);
-      ctx.restore();
+      if (faces.length > 1) {
+        // Draw compact edge-traced badge above each detected face
+        const smallFont = Math.max(11, Math.floor(12.5 * scale));
+        const smallPillH = Math.max(20, Math.floor(23 * scale));
+        ctx.font = `bold ${smallFont}px sans-serif`;
+        faces.forEach((f, i) => {
+          const label = `Face #${i + 1}`;
+          const tw = ctx.measureText(label).width;
+          const fx = Math.max(6, Math.min(W - tw - 16, f.cx - (tw + 16) / 2));
+          const fy = Math.max(6, f.topY - smallPillH - 5);
+          ctx.save();
+          ctx.fillStyle = 'rgba(5, 150, 105, 0.92)';
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(fx, fy, tw + 16, smallPillH, 5) : ctx.rect(fx, fy, tw + 16, smallPillH);
+          ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(label, fx + 8, fy + smallFont + 3);
+          ctx.restore();
+        });
+      } else {
+        const text = `😀 Face Contour (${state.detectedFaceStats.coveragePct}%)`;
+        const textW = ctx.measureText(text).width;
+        const fx = Math.max(10, Math.min(W - textW - 24, state.detectedFaceStats.topX - textW / 2));
+        const fy = Math.max(10, state.detectedFaceStats.topY - pillH - 6);
+
+        ctx.save();
+        ctx.fillStyle = '#059669';
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(fx, fy, textW + 20, pillH, 6) : ctx.rect(fx, fy, textW + 20, pillH);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(text, fx + 10, fy + fontSize + 4);
+        ctx.restore();
+      }
     }
   }
 
@@ -1203,6 +2073,186 @@ document.addEventListener('DOMContentLoaded', () => {
       }];
     }
     return null; // Entire Image
+  }
+
+  /* ==========================================================================
+     Encryption Metadata (auto-detect scope & key type during decryption)
+     --------------------------------------------------------------------------
+     The exact pixel mask / ROI used for encryption is stored in a PNG "tEXt"
+     chunk (keyword "BitShield"). Pixel data is untouched, so restoration stays
+     100% lossless, and the Decrypt tab never needs to ask for a scope.
+     ========================================================================== */
+  const META_KEYWORD = 'BitShield';
+  const SCOPE_LABELS = { full: 'Entire Image', person: 'Body Silhouette', face: 'Face Contour', custom: 'Custom ROI' };
+
+  function bytesToBase64(bytes) {
+    let bin = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(bin);
+  }
+
+  function base64ToBytes(b64) {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  // Run-length encode a binary mask (alternating runs, starting with 0s) as LEB128 varints.
+  function encodeMaskRLE(mask) {
+    const bytes = [];
+    const pushVarint = (v) => {
+      while (v >= 0x80) { bytes.push((v & 0x7F) | 0x80); v >>>= 7; }
+      bytes.push(v);
+    };
+    let cur = 0, run = 0;
+    for (let i = 0; i < mask.length; i++) {
+      const v = mask[i] ? 1 : 0;
+      if (v === cur) run++;
+      else { pushVarint(run); cur = v; run = 1; }
+    }
+    pushVarint(run);
+    return bytesToBase64(Uint8Array.from(bytes));
+  }
+
+  function decodeMaskRLE(b64, total) {
+    const bytes = base64ToBytes(b64);
+    const mask = new Uint8Array(total);
+    let pos = 0, cur = 0, i = 0;
+    while (i < bytes.length && pos < total) {
+      let v = 0, shift = 0, b;
+      do { b = bytes[i++]; v |= (b & 0x7F) << shift; shift += 7; } while (b & 0x80 && i < bytes.length);
+      v >>>= 0;
+      if (cur === 1) mask.fill(1, pos, Math.min(total, pos + v));
+      pos += v;
+      cur ^= 1;
+    }
+    return mask;
+  }
+
+  // Build in-memory metadata from the mask actually passed to the encryptor.
+  function buildEncryptionMeta(scope, activeMask, keyType, w, h) {
+    const meta = { scope, keyType, w, h, mask: null, roi: null };
+    if (activeMask instanceof Uint8Array) {
+      meta.mask = new Uint8Array(activeMask);
+    } else if (Array.isArray(activeMask) && activeMask[0]) {
+      const r = activeMask[0];
+      meta.roi = { x: r.x, y: r.y, width: r.width, height: r.height };
+    } else {
+      meta.scope = 'full';
+    }
+    return meta;
+  }
+
+  function serializeMeta(meta) {
+    const obj = { v: 1, scope: meta.scope, keyType: meta.keyType, w: meta.w, h: meta.h };
+    if (meta.mask) obj.rle = encodeMaskRLE(meta.mask);
+    if (meta.roi) obj.roi = meta.roi;
+    return JSON.stringify(obj);
+  }
+
+  function parseMeta(text) {
+    const obj = JSON.parse(text);
+    if (!obj || obj.v !== 1 || !obj.w || !obj.h) return null;
+    return {
+      scope: obj.scope || 'full',
+      keyType: obj.keyType === 'image' ? 'image' : 'text',
+      w: obj.w,
+      h: obj.h,
+      mask: obj.rle ? decodeMaskRLE(obj.rle, obj.w * obj.h) : null,
+      roi: obj.roi || null
+    };
+  }
+
+  function getMetaDecryptionMask(meta) {
+    if (!meta) return null;
+    if (meta.mask) return meta.mask;
+    if (meta.roi) return [meta.roi];
+    return null; // Entire image
+  }
+
+  // --- Minimal PNG chunk read/write ---
+  const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+
+  function crc32(bytes) {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function isPngBytes(bytes) {
+    const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+    return bytes.length > 8 && sig.every((b, i) => bytes[i] === b);
+  }
+
+  function chunkType(bytes, offset) {
+    return String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
+  }
+
+  function embedPngTextChunk(pngBytes, keyword, text) {
+    if (!isPngBytes(pngBytes)) return pngBytes;
+    const dv = new DataView(pngBytes.buffer, pngBytes.byteOffset, pngBytes.byteLength);
+    let offset = 8, iendPos = -1;
+    while (offset + 8 <= pngBytes.length) {
+      const len = dv.getUint32(offset);
+      if (chunkType(pngBytes, offset) === 'IEND') { iendPos = offset; break; }
+      offset += 12 + len;
+    }
+    if (iendPos < 0) return pngBytes;
+
+    const enc = new TextEncoder();
+    const kw = enc.encode(keyword);
+    const tx = enc.encode(text);
+    const data = new Uint8Array(kw.length + 1 + tx.length);
+    data.set(kw, 0);
+    data[kw.length] = 0;
+    data.set(tx, kw.length + 1);
+
+    const chunk = new Uint8Array(12 + data.length);
+    const cdv = new DataView(chunk.buffer);
+    cdv.setUint32(0, data.length);
+    chunk.set([0x74, 0x45, 0x58, 0x74], 4); // "tEXt"
+    chunk.set(data, 8);
+    cdv.setUint32(8 + data.length, crc32(chunk.subarray(4, 8 + data.length)));
+
+    const out = new Uint8Array(pngBytes.length + chunk.length);
+    out.set(pngBytes.subarray(0, iendPos), 0);
+    out.set(chunk, iendPos);
+    out.set(pngBytes.subarray(iendPos), iendPos + chunk.length);
+    return out;
+  }
+
+  function readPngTextChunk(bytes, keyword) {
+    if (!isPngBytes(bytes)) return null;
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const dec = new TextDecoder();
+    let offset = 8;
+    while (offset + 12 <= bytes.length) {
+      const len = dv.getUint32(offset);
+      const type = chunkType(bytes, offset);
+      if (offset + 12 + len > bytes.length) break;
+      if (type === 'tEXt') {
+        const data = bytes.subarray(offset + 8, offset + 8 + len);
+        const nul = data.indexOf(0);
+        if (nul > 0 && dec.decode(data.subarray(0, nul)) === keyword) {
+          return dec.decode(data.subarray(nul + 1));
+        }
+      }
+      if (type === 'IEND') break;
+      offset += 12 + len;
+    }
+    return null;
   }
 
   /* ==========================================================================
@@ -1295,6 +2345,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Encrypt Tab: Image Upload & Dropzone Handling
   function handleEncImageUpload(file) {
     if (!file) return;
+    const base = (file.name || 'image').replace(/\.[^/.]+$/, '');
+    state.encFileName = base || 'image';
     loadImage(file, (img) => {
       state.encImage = img;
       state.customRoi = { x: 0, y: 0, width: 0, height: 0, active: false };
@@ -1382,58 +2434,103 @@ document.addEventListener('DOMContentLoaded', () => {
 
     DOM.btnProcessEncrypt.disabled = true;
     DOM.btnProcessEncrypt.classList.remove('btn-key-needed');
-    DOM.btnProcessEncrypt.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Encrypting (3-Stage Pipeline)...';
+    DOM.btnProcessEncrypt.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Encrypting & Packing .msbx (100k SHA-256)...';
 
     setTimeout(async () => {
-      // Temporary canvas to read original clean pixels without overlays
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = state.encImage.width;
-      tempCanvas.height = state.encImage.height;
-      const tempCtx = tempCanvas.getContext('2d');
-      tempCtx.drawImage(state.encImage, 0, 0);
+      try {
+        // Temporary canvas to read original clean pixels without overlays
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = state.encImage.width;
+        tempCanvas.height = state.encImage.height;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(state.encImage, 0, 0);
 
-      const imgData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-      const activeMask = getActiveScopeMask();
+        const imgData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+        const activeMask = getActiveScopeMask();
+        const kVal = DOM.encKSelect ? (parseInt(DOM.encKSelect.value, 10) || 2) : 2;
 
-      // Cache original copy for ground-truth fidelity verification in Decrypt tab
-      state.lastOriginalImageData = new ImageData(
-        new Uint8ClampedArray(imgData.data),
-        imgData.width,
-        imgData.height
-      );
-      state.lastEncryptedScope = state.encScope;
-      state.lastEncryptedPassword = DOM.encPassword.value;
-      state.lastEncryptedKeyType = state.encKeyType;
-      state.lastEncryptedKeyImage = state.encKeyImage ? { ...state.encKeyImage } : null;
-      state.lastEncryptedRoi = (state.encScope === 'custom' && state.customRoi.active) ? { ...state.customRoi } : null;
+        // Cache original copy for ground-truth fidelity verification in Decrypt tab
+        state.lastOriginalImageData = new ImageData(
+          new Uint8ClampedArray(imgData.data),
+          imgData.width,
+          imgData.height
+        );
+        state.lastEncryptedScope = state.encScope;
+        state.lastEncryptedPassword = DOM.encPassword.value;
+        state.lastEncryptedKeyType = state.encKeyType;
+        state.lastEncryptedKeyImage = state.encKeyImage ? { ...state.encKeyImage } : null;
+        state.lastEncryptedRoi = (state.encScope === 'custom' && state.customRoi.active) ? { ...state.customRoi } : null;
+        state.lastEncryptedMeta = buildEncryptionMeta(
+          state.encScope,
+          activeMask,
+          state.encKeyType,
+          imgData.width,
+          imgData.height
+        );
 
-      // Execute 3-Stage Reversible Image Encryption
-      const result = await BitEngine.encryptImage(imgData, effectiveKey, activeMask);
+        // Execute Chapter 4 3-Stage Reversible Encryption & Pack Portable .msbx Container
+        const result = await BitEngine.encryptToMSBX(imgData, effectiveKey, activeMask, {
+          k: kVal,
+          iterations: BitEngine.DEFAULT_KDF_ITERATIONS,
+          keyType: state.encKeyType === 'image' ? 'image' : 'text',
+          scope: state.encScope
+        });
 
-      // Cache encrypted image result
-      state.lastEncryptedImageData = new ImageData(
-        new Uint8ClampedArray(result.imageData.data),
-        result.imageData.width,
-        result.imageData.height
-      );
+        // Cache encrypted .msbx binary container & preview ImageData
+        state.lastEncryptedMSBX = result.msbxBytes;
+        state.lastEncryptedHeader = result.header;
+        state.lastEncryptedImageData = new ImageData(
+          new Uint8ClampedArray(result.imageData.data),
+          result.imageData.width,
+          result.imageData.height
+        );
 
-      const canvas = DOM.canvasEncResult;
-      renderToCanvas(state.encImage, canvas, DOM.phEncResult);
-      const ctx = canvas.getContext('2d');
-      ctx.putImageData(result.imageData, 0, 0);
+        const canvas = DOM.canvasEncResult;
+        renderToCanvas(state.encImage, canvas, DOM.phEncResult);
+        const ctx = canvas.getContext('2d');
+        ctx.putImageData(result.imageData, 0, 0);
 
-      // Metrics display
-      DOM.valEncMse.textContent = result.mse;
-      DOM.valEncPsnr.textContent = result.psnr + (result.psnr === '∞' ? '' : ' dB');
-      DOM.valEncSwapped.textContent = result.swappedCount.toLocaleString();
-      DOM.encMetrics.style.display = 'flex';
-      DOM.btnDownloadEncrypted.disabled = false;
+        // Metrics display
+        DOM.valEncMse.textContent = result.mse;
+        DOM.valEncPsnr.textContent = result.psnr + (result.psnr === '∞' ? '' : ' dB');
+        DOM.valEncSwapped.textContent = result.swappedCount.toLocaleString();
+        DOM.encMetrics.style.display = 'flex';
 
-      updateEncButtonState();
+        if (DOM.btnDownloadMsbx) DOM.btnDownloadMsbx.disabled = false;
+        if (DOM.btnDownloadEncrypted) DOM.btnDownloadEncrypted.disabled = false;
+        renderMsbxHeaderCard(
+          DOM.encMsbxInfo,
+          result.header,
+          result.msbxBytes.byteLength,
+          'Generated Portable .msbx Container (68-Byte Header)'
+        );
+      } catch (err) {
+        console.error('Encryption failed:', err);
+        alert('Encryption failed: ' + (err && err.message ? err.message : String(err)));
+      } finally {
+        updateEncButtonState();
+      }
     }, 50);
   });
 
-  // Export Quality Slider & Download
+  // Download Portable .msbx Container File
+  if (DOM.btnDownloadMsbx) {
+    DOM.btnDownloadMsbx.addEventListener('click', () => {
+      if (!state.lastEncryptedMSBX) {
+        alert('Please encrypt an image first to generate a portable .msbx container.');
+        return;
+      }
+      const blob = new Blob([state.lastEncryptedMSBX], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = `${state.encFileName || 'encrypted'}.msbx`;
+      link.href = url;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    });
+  }
+
+  // Export Quality Slider & Secondary Preview Image Download
   DOM.encExportFormat.addEventListener('change', (e) => {
     DOM.jpegQualityGroup.style.display = (e.target.value === 'image/jpeg') ? 'block' : 'none';
   });
@@ -1446,10 +2543,41 @@ document.addEventListener('DOMContentLoaded', () => {
     const format = DOM.encExportFormat.value;
     const quality = parseFloat(DOM.encQuality.value);
     const canvas = DOM.canvasEncResult;
-    
-    const link = document.createElement('a');
     const ext = format.split('/')[1] === 'jpeg' ? 'jpg' : format.split('/')[1];
-    link.download = `encrypted_3stage.${ext}`;
+
+    if (format === 'image/bmp' && state.lastEncryptedImageData) {
+      const bmpBlob = BitEngine.imageDataToBMPBlob(state.lastEncryptedImageData);
+      const url = URL.createObjectURL(bmpBlob);
+      const link = document.createElement('a');
+      link.download = `${state.encFileName || 'encrypted'}_preview.bmp`;
+      link.href = url;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      return;
+    }
+
+    // When exporting preview as PNG, embed the BitShield metadata chunk
+    if (format === 'image/png' && state.lastEncryptedMeta) {
+      try {
+        const dataUrl = canvas.toDataURL('image/png');
+        const b64 = dataUrl.split(',')[1];
+        const pngBytes = base64ToBytes(b64);
+        const withMeta = embedPngTextChunk(pngBytes, META_KEYWORD, serializeMeta(state.lastEncryptedMeta));
+        const blob = new Blob([withMeta], { type: 'image/png' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.download = `${state.encFileName || 'encrypted'}_preview.png`;
+        link.href = url;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        return;
+      } catch (err) {
+        console.warn('Metadata chunk embed fallback:', err);
+      }
+    }
+
+    const link = document.createElement('a');
+    link.download = `${state.encFileName || 'encrypted'}_preview.${ext}`;
     link.href = canvas.toDataURL(format, quality);
     link.click();
   });
@@ -1479,39 +2607,94 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /* ==========================================================================
-     Tab 2: Decrypt & Restore Logic (with Scope Matching & Ground-Truth Verification)
+     Tab 2: Decrypt & Restore Logic (.msbx Container + Auto-Detected Region & Key)
      ========================================================================== */
-  function setDecScope(scopeKey, targetBtn) {
-    state.decScope = scopeKey;
-    [DOM.btnDecScopeFull, DOM.btnDecScopePerson, DOM.btnDecScopeFace, DOM.btnDecScopeCustom].forEach(b => {
-      if (b) b.classList.remove('active');
-    });
-    if (targetBtn) targetBtn.classList.add('active');
-  }
-
-  if (DOM.btnDecScopeFull) DOM.btnDecScopeFull.addEventListener('click', () => setDecScope('full', DOM.btnDecScopeFull));
-  if (DOM.btnDecScopePerson) DOM.btnDecScopePerson.addEventListener('click', () => setDecScope('person', DOM.btnDecScopePerson));
-  if (DOM.btnDecScopeFace) DOM.btnDecScopeFace.addEventListener('click', () => setDecScope('face', DOM.btnDecScopeFace));
-  if (DOM.btnDecScopeCustom) DOM.btnDecScopeCustom.addEventListener('click', () => setDecScope('custom', DOM.btnDecScopeCustom));
-
-  function getActiveDecScopeMask() {
-    if (state.decScope === 'person') return state.bodyMask;
-    if (state.decScope === 'face') return state.faceMask;
-    if (state.decScope === 'custom' && state.lastEncryptedRoi) {
-      return [state.lastEncryptedRoi];
+  function updateDecScopeBanner(meta) {
+    if (!DOM.decScopeInfo || !DOM.decScopeInfoText) return;
+    if (!meta) {
+      DOM.decScopeInfo.style.display = 'none';
+      return;
     }
-    return null; // Entire image
+    const label = SCOPE_LABELS[meta.scope] || 'Entire Image';
+    const keyHint = meta.keyType === 'image'
+      ? 'Encrypted with an <b>Image Key</b> — upload the matching key image below (or enter password).'
+      : 'Enter your password or upload your key image below to decrypt and verify the SHA-256 tag.';
+    DOM.decScopeInfo.className = 'dec-scope-info';
+    DOM.decScopeInfo.style.display = 'flex';
+    DOM.decScopeInfoText.innerHTML = `<b>Auto-detected encrypted region:</b> ${label}. ${keyHint}`;
   }
 
-  // 1-Click Test: Transfer encrypted result from Encrypt Tab to Decrypt Tab
+  function renderImageDataToCanvas(imgData, canvas, placeholder) {
+    if (!canvas || !imgData) return;
+    const ctx = canvas.getContext('2d');
+    canvas.style.display = 'block';
+    canvas.width = imgData.width;
+    canvas.height = imgData.height;
+    ctx.putImageData(imgData, 0, 0);
+    if (placeholder) placeholder.style.display = 'none';
+  }
+
+  function loadMsbxIntoDecryptTab(msbxBytes, sourceName) {
+    hideDecError();
+    clearDecryptedResultView();
+
+    try {
+      const inspected = BitEngine.inspectMSBX(msbxBytes);
+      state.decMsbxBytes = new Uint8Array(msbxBytes);
+      state.decMsbxHeader = inspected.header;
+      state.decImage = null;
+      state.decFileName = (sourceName || 'restored_photo').replace(/\.[^/.]+$/, '') || 'restored_photo';
+      state.decMeta = {
+        scope: inspected.header.scope || 'full',
+        keyType: inspected.header.keyType || 'text',
+        w: inspected.header.width,
+        h: inspected.header.height,
+        mask: inspected.mask,
+        roi: null
+      };
+
+      renderImageDataToCanvas(inspected.previewImageData, DOM.canvasDecOrig, DOM.phDecOrig);
+      refreshDecKeySourceUI();
+      renderMsbxHeaderCard(
+        DOM.decMsbxMeta,
+        inspected.header,
+        msbxBytes.byteLength,
+        `Loaded .msbx Container (${sourceName || 'encrypted.msbx'})`
+      );
+      updateDecScopeBanner(state.decMeta);
+      updateDecButtonState();
+    } catch (err) {
+      state.decMsbxBytes = null;
+      state.decMsbxHeader = null;
+      state.decImage = null;
+      state.decMeta = null;
+      clearCanvasAndShowPlaceholder(DOM.canvasDecOrig, DOM.phDecOrig);
+      clearDecryptedResultView();
+      if (DOM.decMsbxMeta) {
+        DOM.decMsbxMeta.style.display = 'none';
+        DOM.decMsbxMeta.innerHTML = '';
+      }
+      if (DOM.decScopeInfo) DOM.decScopeInfo.style.display = 'none';
+      const msg = err && err.message ? err.message : String(err);
+      showDecError('Invalid or Corrupted .msbx Container', msg);
+      updateDecButtonState();
+      alert(msg);
+    }
+  }
+
+  // 1-Click Test: Transfer encrypted .msbx container from Encrypt Tab to Decrypt Tab
   if (DOM.btnUseEncryptedFromEnc) {
     DOM.btnUseEncryptedFromEnc.addEventListener('click', () => {
+      if (state.lastEncryptedMSBX) {
+        loadMsbxIntoDecryptTab(state.lastEncryptedMSBX, `${state.encFileName || 'encrypted'}.msbx`);
+        return;
+      }
+
       if (!state.lastEncryptedImageData) {
         alert("Please execute encryption on an image in the Encrypt Tab first!");
         return;
       }
 
-      // Prepare image from lastEncryptedImageData
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = state.lastEncryptedImageData.width;
       tempCanvas.height = state.lastEncryptedImageData.height;
@@ -1520,38 +2703,103 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const img = new Image();
       img.onload = () => {
+        hideDecError();
+        state.decMsbxBytes = null;
+        state.decMsbxHeader = null;
+        if (DOM.decMsbxMeta) DOM.decMsbxMeta.style.display = 'none';
         state.decImage = img;
+        state.decMeta = state.lastEncryptedMeta || {
+          scope: 'full',
+          keyType: state.lastEncryptedKeyType || 'text',
+          w: img.width,
+          h: img.height,
+          mask: null,
+          roi: null
+        };
         renderToCanvas(img, DOM.canvasDecOrig, DOM.phDecOrig);
-
-        // Refresh view: Clear previous decrypted/restored result & metrics
         clearDecryptedResultView();
-
-        // Refresh key source selection: Reset to Text Password, clear inputs & badges
         refreshDecKeySourceUI();
-
-        if (state.lastEncryptedScope === 'person') setDecScope('person', DOM.btnDecScopePerson);
-        else if (state.lastEncryptedScope === 'face') setDecScope('face', DOM.btnDecScopeFace);
-        else if (state.lastEncryptedScope === 'custom') setDecScope('custom', DOM.btnDecScopeCustom);
-        else setDecScope('full', DOM.btnDecScopeFull);
-
+        updateDecScopeBanner(state.decMeta);
         updateDecButtonState();
       };
       img.src = tempCanvas.toDataURL('image/png');
     });
   }
 
-  function handleDecImageUpload(file) {
+  function isKnownRasterSignature(bytes) {
+    if (!bytes || bytes.length < 4) return false;
+    // PNG: 89 50 4E 47
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return true;
+    // BMP: 42 4D ("BM")
+    if (bytes[0] === 0x42 && bytes[1] === 0x4D) return true;
+    // JPEG: FF D8 FF
+    if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return true;
+    // WEBP: "RIFF"...."WEBP"
+    if (bytes.length >= 12 &&
+        bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+        bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return true;
+    // GIF: "GIF8"
+    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return true;
+    return false;
+  }
+
+  async function handleDecImageUpload(file) {
     if (!file) return;
+
+    let rawBytes = null;
+    try {
+      const buf = await file.arrayBuffer();
+      rawBytes = new Uint8Array(buf);
+    } catch (err) {
+      showDecError('File Read Error', 'Could not read the uploaded file.');
+      return;
+    }
+
+    const isMsbxExt = /\.msbx$/i.test(file.name || '');
+    const isMsbxMagic = rawBytes.length >= 4 &&
+      rawBytes[0] === 0x4D && rawBytes[1] === 0x53 && rawBytes[2] === 0x42 && rawBytes[3] === 0x58;
+
+    // Route .msbx files (or non-raster binary containers) through the Chapter 4 .msbx parser
+    if (isMsbxExt || isMsbxMagic || !isKnownRasterSignature(rawBytes)) {
+      loadMsbxIntoDecryptTab(rawBytes, file.name);
+      return;
+    }
+
+    // Legacy fallback: lossless PNG / BMP image upload
+    hideDecError();
+    state.decMsbxBytes = null;
+    state.decMsbxHeader = null;
+    if (DOM.decMsbxMeta) {
+      DOM.decMsbxMeta.style.display = 'none';
+      DOM.decMsbxMeta.innerHTML = '';
+    }
+
+    let embeddedMeta = null;
+    try {
+      const rawText = readPngTextChunk(rawBytes, META_KEYWORD);
+      if (rawText) embeddedMeta = parseMeta(rawText);
+    } catch (e) {
+      embeddedMeta = null;
+    }
+
     loadImage(file, (img) => {
       state.decImage = img;
+      state.decFileName = (file.name || 'restored_photo').replace(/\.[^/.]+$/, '') || 'restored_photo';
       renderToCanvas(img, DOM.canvasDecOrig, DOM.phDecOrig);
-
-      // Refresh view: Clear previous decrypted/restored result & metrics
       clearDecryptedResultView();
-
-      // Refresh key source selection: Reset to Text Password, clear inputs & badges
       refreshDecKeySourceUI();
 
+      if (embeddedMeta && embeddedMeta.w === img.width && embeddedMeta.h === img.height) {
+        state.decMeta = embeddedMeta;
+      } else if (state.lastEncryptedMeta &&
+                 state.lastEncryptedMeta.w === img.width &&
+                 state.lastEncryptedMeta.h === img.height) {
+        state.decMeta = state.lastEncryptedMeta;
+      } else {
+        state.decMeta = { scope: 'full', keyType: 'text', w: img.width, h: img.height, mask: null, roi: null };
+      }
+
+      updateDecScopeBanner(state.decMeta);
       updateDecButtonState();
     });
   }
@@ -1583,96 +2831,168 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   DOM.btnProcessDecrypt.addEventListener('click', async (e) => {
-    if (!state.decImage) return;
+    if (!state.decImage && !state.decMsbxBytes) return;
 
-    // 1. If Text Password mode: Validate password entered
-    if (state.decKeyType === 'text') {
-      const pwdVal = DOM.decPassword ? DOM.decPassword.value.trim() : '';
-      if (!pwdVal) {
-        e.preventDefault();
-        if (DOM.decPassword) {
-          DOM.decPassword.classList.add('input-invalid');
-          DOM.decPassword.focus();
-          setTimeout(() => DOM.decPassword.classList.remove('input-invalid'), 1200);
-        }
-        alert("Please enter the decryption password first to restore the image!");
-        return;
-      }
-    }
+    const pwdVal = DOM.decPassword ? DOM.decPassword.value.trim() : '';
+    const hasPwd = pwdVal.length > 0;
+    const hasImgKey = !!state.decKeyImage;
 
-    // 2. If Image Key mode: Validate matching key image is uploaded
-    if (state.decKeyType === 'image' && !state.decKeyImage) {
+    if (!hasPwd && !hasImgKey) {
       e.preventDefault();
-      if (DOM.decKeyImageDropzone) {
-        DOM.decKeyImageDropzone.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        DOM.decKeyImageDropzone.classList.add('highlight-pulse');
-        setTimeout(() => DOM.decKeyImageDropzone.classList.remove('highlight-pulse'), 1500);
+      if (DOM.decPassword) {
+        DOM.decPassword.classList.add('input-invalid');
+        DOM.decPassword.focus();
+        setTimeout(() => DOM.decPassword.classList.remove('input-invalid'), 1200);
       }
-      if (DOM.decKeyImageInput) DOM.decKeyImageInput.click();
-      alert("Please upload the matching key image to restore the original image!");
+      alert("Please enter the decryption password OR upload the key image to decrypt!");
       return;
     }
 
-    // Resolve key from text password OR key image
-    let effectiveKey = '';
-    if (state.decKeyType === 'image') {
-      effectiveKey = state.decKeyImage.hex;
+    // Resolve candidate key(s): if both are supplied, try the header's keyType first
+    let primaryKey = '';
+    let fallbackKey = null;
+    if (hasImgKey && hasPwd) {
+      if (state.decMeta && state.decMeta.keyType === 'image') {
+        primaryKey = state.decKeyImage.hex;
+        fallbackKey = DOM.decPassword.value;
+      } else {
+        primaryKey = DOM.decPassword.value;
+        fallbackKey = state.decKeyImage.hex;
+      }
+    } else if (hasImgKey) {
+      primaryKey = state.decKeyImage.hex;
     } else {
-      effectiveKey = DOM.decPassword.value;
+      primaryKey = DOM.decPassword.value;
     }
 
+    hideDecError();
     DOM.btnProcessDecrypt.disabled = true;
     DOM.btnProcessDecrypt.classList.remove('btn-key-needed');
-    DOM.btnProcessDecrypt.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Reversing 3 Stages...';
+    DOM.btnProcessDecrypt.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying SHA-256 Tag & Reversing 3 Stages...';
 
     setTimeout(async () => {
-      // Read encrypted input image data from canvas
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = state.decImage.width;
-      tempCanvas.height = state.decImage.height;
-      const tempCtx = tempCanvas.getContext('2d');
-      tempCtx.drawImage(state.decImage, 0, 0);
+      try {
+        // Path A: Portable .msbx Container Decryption + 32-Byte SHA-256 Tag Verification
+        if (state.decMsbxBytes) {
+          let result = null;
+          try {
+            result = await BitEngine.decryptFromMSBX(state.decMsbxBytes, primaryKey);
+          } catch (firstErr) {
+            if (fallbackKey !== null) {
+              result = await BitEngine.decryptFromMSBX(state.decMsbxBytes, fallbackKey);
+            } else {
+              throw firstErr;
+            }
+          }
 
-      const inputImgData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-      const decMask = getActiveDecScopeMask();
-      
-      // Execute 3-Stage Reversible Image Decryption (Exact Reverse Order)
-      const result = await BitEngine.decryptImage(inputImgData, effectiveKey, decMask);
+          state.lastDecryptedImageData = new ImageData(
+            new Uint8ClampedArray(result.imageData.data),
+            result.imageData.width,
+            result.imageData.height
+          );
 
-      // Render restored canvas
-      const canvas = DOM.canvasDecResult;
-      renderToCanvas(state.decImage, canvas, DOM.phDecResult);
-      const ctx = canvas.getContext('2d');
-      ctx.putImageData(result.imageData, 0, 0);
+          renderImageDataToCanvas(result.imageData, DOM.canvasDecResult, DOM.phDecResult);
 
-      // Check ground-truth fidelity against original image if available
-      if (state.lastOriginalImageData && 
-          state.lastOriginalImageData.width === result.imageData.width && 
-          state.lastOriginalImageData.height === result.imageData.height) {
-        const fidelity = BitEngine.calculateMetrics(state.lastOriginalImageData, result.imageData);
-        DOM.valDecMse.textContent = fidelity.mse.toFixed(4);
-        DOM.valDecPsnr.textContent = fidelity.psnr === Infinity ? '∞' : (fidelity.psnr + ' dB');
-      } else {
-        DOM.valDecMse.textContent = result.mse;
-        DOM.valDecPsnr.textContent = result.psnr + (result.psnr === '∞' ? '' : ' dB');
+          // Check ground-truth fidelity against original image if available in session
+          if (state.lastOriginalImageData &&
+              state.lastOriginalImageData.width === result.imageData.width &&
+              state.lastOriginalImageData.height === result.imageData.height) {
+            const fidelity = BitEngine.calculateMetrics(state.lastOriginalImageData, result.imageData);
+            DOM.valDecMse.textContent = fidelity.mse.toFixed(4);
+            DOM.valDecPsnr.textContent = fidelity.psnr === Infinity ? '∞ dB' : (fidelity.psnr + ' dB');
+          } else {
+            DOM.valDecMse.textContent = '0.0000';
+            DOM.valDecPsnr.textContent = '∞ dB';
+          }
+
+          DOM.valDecSwapped.textContent = result.swappedCount.toLocaleString();
+          const titleEl = document.getElementById('dec-fidelity-title');
+          const descEl = document.getElementById('dec-fidelity-desc');
+          if (titleEl) {
+            titleEl.textContent = 'SHA-256 Verification Tag Matched • 0 Different Pixels';
+          }
+          if (descEl) {
+            descEl.innerHTML = `68-byte <code>.msbx</code> header verified (${result.header.iterations.toLocaleString()} SHA-256 iterations, <i>k</i> = ${result.header.k}). Exact lossless recovery achieved (<code>MSE = 0.0000</code>, <code>PSNR = ∞ dB</code>).`;
+          }
+
+          DOM.decMetrics.style.display = 'flex';
+          DOM.decFidelityCard.style.display = 'flex';
+          DOM.btnDownloadRestored.disabled = false;
+          return;
+        }
+
+        // Path B: Legacy Encrypted PNG/BMP Image Decryption
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = state.decImage.width;
+        tempCanvas.height = state.decImage.height;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(state.decImage, 0, 0);
+
+        const inputImgData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+        const decMask = getMetaDecryptionMask(state.decMeta);
+
+        const result = await BitEngine.decryptImage(inputImgData, primaryKey, decMask);
+        state.lastDecryptedImageData = new ImageData(
+          new Uint8ClampedArray(result.imageData.data),
+          result.imageData.width,
+          result.imageData.height
+        );
+
+        renderImageDataToCanvas(result.imageData, DOM.canvasDecResult, DOM.phDecResult);
+
+        if (state.lastOriginalImageData &&
+            state.lastOriginalImageData.width === result.imageData.width &&
+            state.lastOriginalImageData.height === result.imageData.height) {
+          const fidelity = BitEngine.calculateMetrics(state.lastOriginalImageData, result.imageData);
+          DOM.valDecMse.textContent = fidelity.mse.toFixed(4);
+          DOM.valDecPsnr.textContent = fidelity.psnr === Infinity ? '∞ dB' : (fidelity.psnr + ' dB');
+        } else {
+          DOM.valDecMse.textContent = result.mse;
+          DOM.valDecPsnr.textContent = result.psnr + (result.psnr === '∞' ? '' : ' dB');
+        }
+
+        DOM.valDecSwapped.textContent = result.swappedCount.toLocaleString();
+        DOM.decMetrics.style.display = 'flex';
+        DOM.decFidelityCard.style.display = 'flex';
+        DOM.btnDownloadRestored.disabled = false;
+      } catch (err) {
+        // Never display or allow saving a partially recovered image when verification fails
+        clearDecryptedResultView();
+        const msg = err && err.message ? err.message : String(err);
+        showDecError('Decryption Failed — Image Not Restored', msg);
+        alert(msg);
+      } finally {
+        updateDecButtonState();
       }
-
-      DOM.valDecSwapped.textContent = result.swappedCount.toLocaleString();
-      
-      DOM.decMetrics.style.display = 'flex';
-      DOM.decFidelityCard.style.display = 'flex';
-      DOM.btnDownloadRestored.disabled = false;
-
-      updateDecButtonState();
     }, 50);
   });
 
   DOM.btnDownloadRestored.addEventListener('click', () => {
+    if (!state.lastDecryptedImageData && (!DOM.canvasDecResult || DOM.canvasDecResult.width === 0)) {
+      alert('No verified decrypted image is available to save.');
+      return;
+    }
     const format = DOM.decExportFormat.value;
     const canvas = DOM.canvasDecResult;
+    const baseName = state.decFileName || 'restored_photo';
+
+    // Genuine uncompressed 24-bit Windows BMP export
+    if (format === 'image/bmp') {
+      const ctx = canvas.getContext('2d');
+      const imgData = state.lastDecryptedImageData || ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const bmpBlob = BitEngine.imageDataToBMPBlob(imgData);
+      const url = URL.createObjectURL(bmpBlob);
+      const link = document.createElement('a');
+      link.download = `${baseName}_restored.bmp`;
+      link.href = url;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      return;
+    }
+
     const link = document.createElement('a');
     const ext = format.split('/')[1] === 'jpeg' ? 'jpg' : format.split('/')[1];
-    link.download = `restored_photo.${ext}`;
+    link.download = `${baseName}_restored.${ext}`;
     link.href = canvas.toDataURL(format, 0.95);
     link.click();
   });

@@ -1707,3 +1707,204 @@ canvas {
   border-top: 1px solid var(--border-light);
   margin-top: 12px;
 }
+
+
+/* ==========================================================================
+   Simplified Decrypt Tab: Auto-Detected Region Banner, OR Divider, Optional Badge
+   ========================================================================== */
+.dec-scope-info {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-emerald-light);
+  border: 1px solid var(--accent-emerald-border);
+  color: #065f46;
+  font-size: 12.5px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.45;
+  animation: fadeIn 0.25s ease-out;
+}
+
+.dec-scope-info i {
+  margin-top: 2px;
+  color: var(--accent-emerald);
+}
+
+.dec-scope-info.warning {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.dec-scope-info.warning i {
+  color: #d97706;
+}
+
+.dec-or-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.dec-or-divider::before,
+.dec-or-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-light);
+}
+
+.key-req-badge.optional {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  border-color: var(--border-light);
+}
+
+.ai-status-badge.error {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+/* ==========================================================================
+   Chapter 4 Portable .msbx Container Inspector & Verification Error Banner
+   ========================================================================== */
+.msbx-k-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.msbx-k-row label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin: 0;
+}
+
+.msbx-k-select {
+  font-size: 12.5px;
+  padding: 7px 10px;
+}
+
+.export-subtext {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  line-height: 1.45;
+}
+
+.secondary-export-details {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-light);
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.secondary-export-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-main);
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.msbx-meta-card {
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  font-size: 12px;
+  color: var(--text-main);
+  margin-bottom: 10px;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.msbx-meta-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  font-size: 12.5px;
+  color: var(--primary-blue);
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.msbx-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+
+.msbx-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.msbx-meta-item.full {
+  grid-column: 1 / -1;
+}
+
+.msbx-meta-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.msbx-meta-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  color: var(--text-main);
+  word-break: break-all;
+}
+
+.dec-error-banner {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.dec-error-banner i {
+  color: #dc2626;
+  font-size: 16px;
+  margin-top: 2px;
+}
+
+.dec-error-content strong {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 2px;
+  color: #7f1d1d;
+}
+
+.dec-error-content p {
+  margin: 0;
+  color: #991b1b;
+}

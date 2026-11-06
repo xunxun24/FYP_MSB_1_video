@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
-  <link rel="stylesheet" href="style.css?v=20261016_3">
+  <link rel="stylesheet" href="style.css?v=20261106_3">
 </head>
 <body>
   <div class="app-container">
@@ -63,10 +63,10 @@
             
             <!-- Upload Area -->
             <div class="drop-zone" id="enc-drop-zone">
-              <input type="file" id="enc-file-input" accept="image/*" class="file-input">
+              <input type="file" id="enc-file-input" accept="image/png,image/bmp,image/*" class="file-input">
               <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
-              <p class="drop-text">Drag & drop your original image here or <span>Browse</span></p>
-              <p class="drop-subtext">Supports PNG, JPEG, WEBP, BMP</p>
+              <p class="drop-text">Drag & drop your original PNG / BMP image here or <span>Browse</span></p>
+              <p class="drop-subtext">Supports PNG, BMP, WEBP, JPEG • Produces a portable <b>.msbx</b> encrypted container</p>
             </div>
             
             <div class="form-group margin-top">
@@ -114,17 +114,31 @@
             </div>
 
             <div class="form-group margin-top">
-              <label><i class="fa-solid fa-layer-group"></i> Active 3-Stage Reversible Cryptosystem:</label>
+              <label><i class="fa-solid fa-layer-group"></i> Active 3-Stage Reversible Cryptosystem (.msbx Container):</label>
               <div class="mode-card-single">
                 <div class="mode-header">
                   <span class="mode-badge msb-badge"><i class="fa-solid fa-lock"></i> 3-Stage Reversible Encryption</span>
-                  <span class="mode-tag"><i class="fa-solid fa-shield-halved"></i> Triple Confusion & Diffusion</span>
+                  <span class="mode-tag"><i class="fa-solid fa-file-shield"></i> 68-Byte MSBX Header + SHA-256 Tag</span>
                 </div>
                 <p class="mode-desc">
-                  <b>Stage 1:</b> Pixel Position Permutation (Fisher-Yates shuffle)<br>
-                  <b>Stage 2:</b> RGB Channel Permutation (6-color rotation)<br>
-                  <b>Stage 3:</b> 2-MSB XOR Encryption (b₇b₆ ⊕ Key₂, preserving lower 6 bits)
+                  <b>KDF:</b> 16-byte fresh CSPRNG salt + 100,000 iterated SHA-256 rounds (domain-tagged streams)<br>
+                  <b>Stage 1:</b> Pixel Position Permutation (Fisher-Yates bijection)<br>
+                  <b>Stage 2:</b> RGB Channel Permutation (6-color group rotation)<br>
+                  <b>Stage 3:</b> <i>k</i>-MSB XOR Encryption (top <i>k</i> bits XORed with keystream, preserving lower 8−<i>k</i> bits)
                 </p>
+                <div class="msbx-k-row">
+                  <label for="enc-k-select"><i class="fa-solid fa-sliders"></i> Stage 3 MSB Bit Depth (<i>k</i> value):</label>
+                  <select id="enc-k-select" class="form-select msbx-k-select">
+                    <option value="1">k = 1 (Top 1 MSB: b₇)</option>
+                    <option value="2" selected>k = 2 (Top 2 MSBs: b₇b₆ — Chapter 4 Default)</option>
+                    <option value="3">k = 3 (Top 3 MSBs: b₇..b₅)</option>
+                    <option value="4">k = 4 (Top 4 MSBs: b₇..b₄)</option>
+                    <option value="5">k = 5 (Top 5 MSBs: b₇..b₃)</option>
+                    <option value="6">k = 6 (Top 6 MSBs: b₇..b₂)</option>
+                    <option value="7">k = 7 (Top 7 MSBs: b₇..b₁)</option>
+                    <option value="8">k = 8 (Full 8-bit XOR: b₇..b₀)</option>
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -264,26 +278,41 @@
 
             <!-- Export Converter Controls -->
             <div class="export-box" id="enc-export-box">
-              <h3><i class="fa-solid fa-file-export"></i> Image Converter & Exporter</h3>
-              <div class="export-row">
-                <div class="form-group flex-1">
-                  <label for="enc-export-format">Export Format:</label>
-                  <select id="enc-export-format" class="form-select">
-                    <option value="image/png" selected>PNG (Lossless - Recommended)</option>
-                    <option value="image/webp">WEBP (High Quality)</option>
-                    <option value="image/jpeg">JPEG (Lossy)</option>
-                    <option value="image/bmp">BMP (Bitmap Raw)</option>
-                  </select>
-                </div>
-                <div class="form-group flex-1" id="jpeg-quality-group" style="display:none;">
-                  <label for="enc-quality">Quality (0.1 - 1.0):</label>
-                  <input type="range" id="enc-quality" min="0.5" max="1" step="0.05" value="0.95" class="slider">
-                  <span id="quality-val">0.95</span>
-                </div>
-                <button id="btn-download-encrypted" class="btn btn-success" disabled>
-                  <i class="fa-solid fa-download"></i> Save Image
+              <h3><i class="fa-solid fa-box-archive"></i> Portable .msbx Encrypted Container</h3>
+              <p class="export-subtext">
+                Download the standalone <code>.msbx</code> container file (68-byte header + encrypted pixel payload + 32-byte SHA-256 verification tag). Anyone can upload this single <code>.msbx</code> file on any device to decrypt and recover the original image without needing a separate PNG/BMP file.
+              </p>
+              <div class="export-row" style="margin-bottom: 12px;">
+                <button id="btn-download-msbx" class="btn btn-primary" style="width: 100%;" disabled>
+                  <i class="fa-solid fa-file-arrow-down"></i> Download Portable .msbx File
                 </button>
               </div>
+
+              <!-- 68-Byte MSBX Header Summary Card -->
+              <div class="msbx-meta-card" id="enc-msbx-info" style="display:none;"></div>
+
+              <details class="secondary-export-details">
+                <summary><i class="fa-solid fa-image"></i> Optional: Save Ciphertext Preview as PNG / BMP Image</summary>
+                <div class="export-row" style="margin-top: 10px;">
+                  <div class="form-group flex-1">
+                    <label for="enc-export-format">Preview Format:</label>
+                    <select id="enc-export-format" class="form-select">
+                      <option value="image/png" selected>PNG (Lossless Preview)</option>
+                      <option value="image/bmp">BMP (Lossless 24-bit Bitmap)</option>
+                      <option value="image/webp">WEBP (High Quality)</option>
+                      <option value="image/jpeg">JPEG (Lossy)</option>
+                    </select>
+                  </div>
+                  <div class="form-group flex-1" id="jpeg-quality-group" style="display:none;">
+                    <label for="enc-quality">Quality (0.1 - 1.0):</label>
+                    <input type="range" id="enc-quality" min="0.5" max="1" step="0.05" value="0.95" class="slider">
+                    <span id="quality-val">0.95</span>
+                  </div>
+                  <button id="btn-download-encrypted" class="btn btn-outline" disabled>
+                    <i class="fa-solid fa-download"></i> Save Preview Image
+                  </button>
+                </div>
+              </details>
             </div>
 
           </div>
@@ -298,43 +327,34 @@
             <h2 class="panel-title"><i class="fa-solid fa-unlock-keyhole"></i> Restorations & Decryption</h2>
             
             <div class="drop-zone" id="dec-drop-zone">
-              <input type="file" id="dec-file-input" accept="image/*" class="file-input">
+              <input type="file" id="dec-file-input" accept=".msbx,application/octet-stream,image/png,image/bmp,image/*" class="file-input">
               <i class="fa-solid fa-file-shield drop-icon"></i>
-              <p class="drop-text">Drag & drop your encrypted image here or <span>Browse</span></p>
-              <p class="drop-subtext">Must be a lossless format (PNG, WEBP, BMP) – Avoid lossy JPG</p>
+              <p class="drop-text">Drag & drop your portable <b>.msbx</b> file here or <span>Browse</span></p>
+              <p class="drop-subtext">Upload a standalone <code>.msbx</code> container (or legacy lossless PNG / BMP)</p>
             </div>
 
             <div class="quick-action-bar margin-top">
               <button type="button" id="btn-use-encrypted-from-enc" class="btn btn-sm btn-outline" style="width: 100%;">
-                <i class="fa-solid fa-arrow-right-arrow-left"></i> Use Encrypted Image from Encrypt Tab (1-Click Test)
+                <i class="fa-solid fa-arrow-right-arrow-left"></i> Use Encrypted .msbx from Encrypt Tab (1-Click Test)
               </button>
             </div>
 
-            <!-- Decryption Scope Selection -->
-            <div class="form-group margin-top">
-              <label><i class="fa-solid fa-crosshairs"></i> Decryption Scope (Must match encryption scope):</label>
-              <div class="ai-scope-grid">
-                <button type="button" class="ai-scope-btn active" id="btn-dec-scope-full" data-scope="full">
-                  <i class="fa-solid fa-border-all"></i>
-                  <span class="scope-btn-title">Entire Image</span>
-                  <span class="scope-btn-sub">Full image restoration</span>
-                </button>
-                <button type="button" class="ai-scope-btn" id="btn-dec-scope-person" data-scope="person">
-                  <i class="fa-solid fa-person"></i>
-                  <span class="scope-btn-title">Body Silhouette</span>
-                  <span class="scope-btn-sub" id="sub-dec-person">Exact body contour</span>
-                </button>
-                <button type="button" class="ai-scope-btn" id="btn-dec-scope-face" data-scope="face">
-                  <i class="fa-solid fa-face-smile"></i>
-                  <span class="scope-btn-title">Face Contour</span>
-                  <span class="scope-btn-sub" id="sub-dec-face">Exact facial shape</span>
-                </button>
-                <button type="button" class="ai-scope-btn" id="btn-dec-scope-custom" data-scope="custom">
-                  <i class="fa-solid fa-vector-square"></i>
-                  <span class="scope-btn-title">Custom ROI</span>
-                  <span class="scope-btn-sub" id="sub-dec-custom">Selected area</span>
-                </button>
+            <!-- Decryption / Container Verification Error Banner -->
+            <div class="dec-error-banner" id="dec-error-banner" style="display:none;" role="alert">
+              <i class="fa-solid fa-triangle-exclamation"></i>
+              <div class="dec-error-content">
+                <strong id="dec-error-title">Decryption / Verification Error</strong>
+                <p id="dec-error-text"></p>
               </div>
+            </div>
+
+            <!-- .msbx 68-byte Header Inspector Card -->
+            <div class="msbx-meta-card margin-top" id="dec-msbx-meta" style="display:none;"></div>
+
+            <!-- Encrypted Region (auto-detected from the file's embedded header/metadata) -->
+            <div class="dec-scope-info" id="dec-scope-info" style="display:none;">
+              <i class="fa-solid fa-wand-magic-sparkles"></i>
+              <span id="dec-scope-info-text">Encrypted region will be detected automatically.</span>
             </div>
 
             <div class="form-group margin-top">
@@ -354,31 +374,13 @@
 
             <!-- Cryptographic Key Source Selection -->
             <div class="form-group margin-top">
-              <label><i class="fa-solid fa-key"></i> Choose Decryption Key Source:</label>
-              <div class="key-selector-grid">
-                <button type="button" class="key-selector-card active" id="btn-dec-keytype-text">
-                  <div class="key-card-radio"><i class="fa-solid fa-circle-dot"></i></div>
-                  <div class="key-card-icon"><i class="fa-solid fa-font"></i></div>
-                  <div class="key-card-info">
-                    <span class="key-card-title">Text Password</span>
-                    <span class="key-card-sub">Type the matching password</span>
-                  </div>
-                </button>
-                <button type="button" class="key-selector-card" id="btn-dec-keytype-image">
-                  <div class="key-card-radio"><i class="fa-regular fa-circle"></i></div>
-                  <div class="key-card-icon"><i class="fa-solid fa-image"></i></div>
-                  <div class="key-card-info">
-                    <span class="key-card-title">Image as Key</span>
-                    <span class="key-card-sub">Upload the matching key image</span>
-                  </div>
-                </button>
-              </div>
+              <label><i class="fa-solid fa-key"></i> Decryption Key:</label>
 
-              <!-- Option A: Text Password Key Prompt -->
+              <!-- Option A: Text Password -->
               <div id="dec-text-key-box" class="key-source-pane">
                 <div class="key-prompt-banner">
                   <i class="fa-solid fa-pen-to-square"></i>
-                  <span><b>Prompt:</b> Please enter the exact password used during encryption:</span>
+                  <span><b>Password:</b> Enter the password used during encryption</span>
                 </div>
                 <div class="input-with-icon" id="dec-pwd-input-wrap">
                   <i class="fa-solid fa-lock icon-left"></i>
@@ -391,11 +393,13 @@
                 </div>
               </div>
 
-              <!-- Option B: Image as Key Prompt -->
-              <div id="dec-img-key-box" class="key-source-pane" style="display: none;">
+              <div class="dec-or-divider"><span>OR</span></div>
+
+              <!-- Option B: Image as Key -->
+              <div id="dec-img-key-box" class="key-source-pane">
                 <div class="key-prompt-banner">
-                  <i class="fa-solid fa-cloud-arrow-up"></i>
-                  <span><b>Prompt:</b> Please upload the exact matching image used as the encryption key:</span>
+                  <i class="fa-solid fa-image"></i>
+                  <span><b>Key image:</b> Upload the image used as the encryption key</span>
                 </div>
                 <div class="key-image-upload-box" id="dec-key-image-dropzone">
                   <input type="file" id="dec-key-image-input" accept="image/*" style="display: none;">
@@ -491,12 +495,13 @@
             </div>
 
             <div class="export-box margin-top">
-              <h3><i class="fa-solid fa-file-export"></i> Save Restored Photo</h3>
+              <h3><i class="fa-solid fa-file-export"></i> Save Restored Photo (PNG / BMP)</h3>
               <div class="export-row">
                 <select id="dec-export-format" class="form-select flex-1">
-                  <option value="image/png">PNG Format (Lossless)</option>
-                  <option value="image/jpeg">JPEG Format</option>
+                  <option value="image/png" selected>PNG Format (Lossless)</option>
+                  <option value="image/bmp">BMP Format (Lossless 24-bit Bitmap)</option>
                   <option value="image/webp">WEBP Format</option>
+                  <option value="image/jpeg">JPEG Format</option>
                 </select>
                 <button id="btn-download-restored" class="btn btn-success" disabled>
                   <i class="fa-solid fa-download"></i> Save Restored Image
@@ -1061,13 +1066,11 @@
     </footer>
   </div>
 
-  <!-- AI Neural Segmentation & Vision Models (TensorFlow.js + BodyPix + BlazeFace) -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.2.0/dist/body-pix.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface@0.0.7/dist/blazeface.min.js"></script>
+  <!-- AI Human Segmentation: MediaPipe Tasks Vision (Selfie Multiclass Segmenter + Face Landmarker).
+       Loaded on demand as an ES module from js/app.js, then refined with an edge-aware guided filter. -->
 
   <!-- Core App Scripts -->
-  <script src="js/bit-engine.js?v=20261016_3"></script>
-  <script src="js/app.js?v=20261016_3"></script>
+  <script src="js/bit-engine.js?v=20261106_3"></script>
+  <script src="js/app.js?v=20261106_3"></script>
 </body>
 </html>
