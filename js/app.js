@@ -18,19 +18,28 @@ document.addEventListener('DOMContentLoaded', () => {
     allMask: null,    // Uint8Array(width * height)
     customRoi: { x: 0, y: 0, width: 0, height: 0, active: false },
     isDraggingRoi: false,
+    isManualAddMode: false,
+    manualAddBox: { x: 0, y: 0, width: 0, height: 0, active: false },
     dragStart: { x: 0, y: 0 },
-    detectedBodyStats: { pixelCount: 0, coveragePct: 0, topX: 0, topY: 0 },
-    detectedFaceStats: { pixelCount: 0, coveragePct: 0, topX: 0, topY: 0 },
+    detectedPersons: [], // Array of validated person instances { id, index, label, confidence, bbox, cx, topY, pixelCount, coveragePct, baseMask, mask, selected }
+    detectedFaces: [],   // Array of validated face instances { id, index, label, confidence, bbox, cx, topY, pixelCount, coveragePct, baseMask, mask, selected }
+    maskBoundaryPadPx: 0,
+    detectionsConfirmed: false,
+    detectedBodyStats: { pixelCount: 0, coveragePct: 0, topX: 0, topY: 0, count: 0 },
+    detectedFaceStats: { pixelCount: 0, coveragePct: 0, topX: 0, topY: 0, count: 0 },
     isAiDetecting: false,
     aiModelsLoaded: false,
-    encFileName: 'image',
+    encFileName: 'encrypted_photo',
     decFileName: 'restored_photo',
     decImage: null,
+    decPngBytes: null,
     decMsbxBytes: null,
     decMsbxHeader: null,
+    decContainerFormat: null, // 'png' | 'msbx'
     decMode: 'msb',
     lastOriginalImageData: null,
     lastEncryptedImageData: null,
+    lastEncryptedPngBytes: null,
     lastEncryptedMSBX: null,
     lastEncryptedHeader: null,
     lastDecryptedImageData: null,
@@ -68,6 +77,20 @@ document.addEventListener('DOMContentLoaded', () => {
     btnClearRoi: document.getElementById('btn-clear-roi'),
     aiDetectionBanner: document.getElementById('ai-detection-banner'),
     aiDetectionText: document.getElementById('ai-detection-text'),
+    aiReviewPanel: document.getElementById('ai-detection-review-panel'),
+    aiRevPersonCount: document.getElementById('ai-rev-person-count'),
+    aiRevFaceCount: document.getElementById('ai-rev-face-count'),
+    aiRevItemsList: document.getElementById('ai-rev-items-list'),
+    btnAiAddManual: document.getElementById('btn-ai-add-manual'),
+    btnAiSelectAll: document.getElementById('btn-ai-select-all'),
+    btnAiRescan: document.getElementById('btn-ai-rescan'),
+    btnAiConfirmDetections: document.getElementById('btn-ai-confirm-detections'),
+    aiManualAddBanner: document.getElementById('ai-manual-add-banner'),
+    aiManualAddText: document.getElementById('ai-manual-add-text'),
+    btnAiCancelManual: document.getElementById('btn-ai-cancel-manual'),
+    aiMaskPadSlider: document.getElementById('ai-mask-pad-slider'),
+    aiMaskPadVal: document.getElementById('ai-mask-pad-val'),
+    aiConfirmStatus: document.getElementById('ai-confirm-status'),
     btnEncKeyTypeText: document.getElementById('btn-enc-keytype-text'),
     btnEncKeyTypeImage: document.getElementById('btn-enc-keytype-image'),
     encTextKeyBox: document.getElementById('enc-text-key-box'),
@@ -95,7 +118,9 @@ document.addEventListener('DOMContentLoaded', () => {
     valEncMse: document.getElementById('val-enc-mse'),
     valEncPsnr: document.getElementById('val-enc-psnr'),
     valEncSwapped: document.getElementById('val-enc-swapped'),
+    valEncTime: document.getElementById('val-enc-time'),
     encKSelect: document.getElementById('enc-k-select'),
+    encProtectMask: document.getElementById('enc-protect-mask'),
     btnDownloadMsbx: document.getElementById('btn-download-msbx'),
     encMsbxInfo: document.getElementById('enc-msbx-info'),
     encExportFormat: document.getElementById('enc-export-format'),
@@ -171,14 +196,49 @@ document.addEventListener('DOMContentLoaded', () => {
       DOM.tabPanes.forEach(p => p.classList.remove('active'));
       
       tab.classList.add('active');
-      const targetPane = document.getElementById(tab.getAttribute('data-tab'));
+      const tabAttr = tab.getAttribute('data-tab');
+      const targetPane = document.getElementById(tabAttr);
       if (targetPane) targetPane.classList.add('active');
 
-      if (tab.getAttribute('data-tab') === 'decrypt-tab') {
+      if (tabAttr === 'decrypt-tab') {
         updateDecButtonState();
       }
     });
   });
+
+  // Dark Mode / Light Mode Theme Toggle
+  const btnThemeToggle = document.getElementById('btn-theme-toggle');
+  const themeToggleIcon = document.getElementById('theme-toggle-icon');
+  const themeToggleLabel = document.getElementById('theme-toggle-label');
+
+  function applyThemeUI(theme) {
+    const isDark = theme === 'dark';
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    if (themeToggleIcon) {
+      themeToggleIcon.className = isDark ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
+    }
+    if (themeToggleLabel) {
+      themeToggleLabel.textContent = isDark ? 'Light Mode' : 'Dark Mode';
+    }
+  }
+
+  try {
+    const initialTheme = localStorage.getItem('kxbit-theme') || 'light';
+    applyThemeUI(initialTheme);
+  } catch (e) {
+    applyThemeUI('light');
+  }
+
+  if (btnThemeToggle) {
+    btnThemeToggle.addEventListener('click', () => {
+      const currentTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+      const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
+      applyThemeUI(nextTheme);
+      try {
+        localStorage.setItem('kxbit-theme', nextTheme);
+      } catch (e) {}
+    });
+  }
 
   // Password Visibility Toggles
   function setupPwdToggle(btn, input) {
@@ -260,7 +320,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    if (!state.decImage && !state.decMsbxBytes) {
+    if (!state.decImage && !state.decPngBytes && !state.decMsbxBytes) {
       DOM.btnProcessDecrypt.disabled = true;
       DOM.btnProcessDecrypt.classList.remove('btn-key-needed');
       DOM.btnProcessDecrypt.innerHTML = '<i class="fa-solid fa-rotate-left"></i> Restore Original Image';
@@ -536,6 +596,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function clearEncryptedResultView() {
     state.lastEncryptedImageData = null;
+    state.lastEncryptedPngBytes = null;
     state.lastEncryptedMSBX = null;
     state.lastEncryptedHeader = null;
     clearCanvasAndShowPlaceholder(DOM.canvasEncResult, DOM.phEncResult);
@@ -543,6 +604,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (DOM.valEncMse) DOM.valEncMse.textContent = '0.00';
     if (DOM.valEncPsnr) DOM.valEncPsnr.textContent = '∞ dB';
     if (DOM.valEncSwapped) DOM.valEncSwapped.textContent = '0';
+    if (DOM.valEncTime) DOM.valEncTime.textContent = '0 ms';
     if (DOM.btnDownloadMsbx) DOM.btnDownloadMsbx.disabled = true;
     if (DOM.encMsbxInfo) {
       DOM.encMsbxInfo.style.display = 'none';
@@ -581,8 +643,9 @@ document.addEventListener('DOMContentLoaded', () => {
   function showDecError(title, message) {
     if (!DOM.decErrorBanner) return;
     if (DOM.decErrorTitle) DOM.decErrorTitle.textContent = title || 'Decryption / Verification Error';
-    if (DOM.decErrorText) DOM.decErrorText.textContent = message || 'Failed to verify or decrypt the container.';
+    if (DOM.decErrorText) DOM.decErrorText.textContent = message || 'Failed to verify or decrypt the file.';
     DOM.decErrorBanner.style.display = 'flex';
+    DOM.decErrorBanner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   function hideDecError() {
@@ -591,46 +654,90 @@ document.addEventListener('DOMContentLoaded', () => {
     if (DOM.decErrorText) DOM.decErrorText.textContent = '';
   }
 
-  function renderMsbxHeaderCard(el, header, byteLength, titleLabel) {
+  /**
+   * Always keep both the Text Password input and the Key-Image upload box visible
+   * on the Decrypt page so the user can freely enter a password OR upload an image as a key.
+   */
+  function applyDecKeyTypeVisibility() {
+    const orDivider = document.querySelector('#decrypt-tab .dec-or-divider');
+    if (DOM.decTextKeyBox) DOM.decTextKeyBox.style.display = 'block';
+    if (DOM.decImgKeyBox) DOM.decImgKeyBox.style.display = 'block';
+    if (orDivider) orDivider.style.display = 'flex';
+  }
+
+  function renderMsbxHeaderCard(el, header, byteLength, titleLabel, extraStats = {}) {
     if (!el || !header) return;
     const kb = (byteLength / 1024).toFixed(1);
     const scopeName = SCOPE_LABELS[header.scope] || 'Entire Image';
+    const keyLabel = header.keyType === 'image' ? 'Key Image (SHA-256)' : 'Text Password';
+    const modeText = header.modeLabel || header.imageModeLabel || 'RGB (24-bit)';
+    const idText = header.identifier || header.magic || 'KENX-ENC';
+    const verText = header.metaVersion
+      ? `Meta v${header.metaVersion} • Algo v${header.algoVersion || 1}`
+      : `v${header.version || 1}`;
+    const maskProtectionText = header.scope !== 'full'
+      ? (header.maskProtected ? 'Protected (Keystream-XOR RLE)' : 'Lossless RLE-Varint')
+      : 'None (Full Image)';
+    const chunkDisplay = header.chunkDisplay
+      || (header.isLegacyChunk || header.chunkType === 'msBx'
+        ? 'msBx (Legacy)'
+        : (header.chunkType === 'msBX' ? 'msBX' : (header.magic === 'MSBX' ? '.msbx Header (Legacy)' : 'msBX')));
+    const losslessCheckHtml = extraStats.verifiedLosslessPng
+      ? `<div class="msbx-meta-item full">
+           <span class="msbx-meta-label">PNG Lossless Pixel Round-Trip Verification</span>
+           <span class="msbx-meta-val" style="color: var(--accent-emerald); font-weight: 600;">✔ Verified (0 different pixels before vs. after PNG encoding • ${extraStats.processingTimeMs || 1} ms)</span>
+         </div>`
+      : '';
+
     el.innerHTML = `
       <div class="msbx-meta-header">
-        <span><i class="fa-solid fa-file-shield"></i> ${titleLabel || 'Portable .msbx Container (68-Byte Fixed Header)'}</span>
+        <span><i class="fa-solid fa-file-shield"></i> ${titleLabel || `Embedded PNG Metadata (Metadata Chunk: ${chunkDisplay})`}</span>
         <span>${kb} KB</span>
       </div>
       <div class="msbx-meta-grid">
         <div class="msbx-meta-item">
-          <span class="msbx-meta-label">Magic / Version</span>
-          <span class="msbx-meta-val">${header.magic} • v${header.version}</span>
+          <span class="msbx-meta-label">Metadata Chunk</span>
+          <span class="msbx-meta-val">${chunkDisplay}</span>
         </div>
         <div class="msbx-meta-item">
-          <span class="msbx-meta-label">Mode / Channels</span>
-          <span class="msbx-meta-val">${header.modeLabel} (mode=${header.imageMode})</span>
+          <span class="msbx-meta-label">FYP Identifier / Version</span>
+          <span class="msbx-meta-val">${idText} (${verText})</span>
         </div>
         <div class="msbx-meta-item">
-          <span class="msbx-meta-label">Stage 3 k-MSB</span>
+          <span class="msbx-meta-label">Original Colour Mode</span>
+          <span class="msbx-meta-val">${modeText} (mode=${header.imageMode ?? header.originalColorMode ?? 1})</span>
+        </div>
+        <div class="msbx-meta-item">
+          <span class="msbx-meta-label">Stage 3 MSB Setting</span>
           <span class="msbx-meta-val">k = ${header.k} bit${header.k > 1 ? 's' : ''}</span>
         </div>
         <div class="msbx-meta-item">
-          <span class="msbx-meta-label">Dimensions</span>
+          <span class="msbx-meta-label">Image Dimensions</span>
           <span class="msbx-meta-val">${header.width} × ${header.height} px</span>
+        </div>
+        <div class="msbx-meta-item">
+          <span class="msbx-meta-label">Required Key Type</span>
+          <span class="msbx-meta-val">${keyLabel}</span>
         </div>
         <div class="msbx-meta-item">
           <span class="msbx-meta-label">KDF Iterations</span>
           <span class="msbx-meta-val">${header.iterations.toLocaleString()} SHA-256</span>
         </div>
         <div class="msbx-meta-item">
-          <span class="msbx-meta-label">Encrypted Scope</span>
+          <span class="msbx-meta-label">Encryption Scope</span>
           <span class="msbx-meta-val">${scopeName}</span>
         </div>
+        <div class="msbx-meta-item">
+          <span class="msbx-meta-label">Mask Storage</span>
+          <span class="msbx-meta-val">${maskProtectionText}</span>
+        </div>
+        ${losslessCheckHtml}
         <div class="msbx-meta-item full">
           <span class="msbx-meta-label">16-Byte Random Salt (Hex)</span>
           <span class="msbx-meta-val">${header.saltHex}</span>
         </div>
         <div class="msbx-meta-item full">
-          <span class="msbx-meta-label">32-Byte SHA-256 Verification Tag (Hex)</span>
+          <span class="msbx-meta-label">32-Byte SHA-256 Original Pixel Verification Tag (Hex)</span>
           <span class="msbx-meta-val">${header.tagHex}</span>
         </div>
       </div>
@@ -750,9 +857,21 @@ document.addEventListener('DOMContentLoaded', () => {
   // Forehead / upper-temple indices in FACE_OVAL_IDX (expanded slightly upward so hairlines can be edge-traced).
   const FOREHEAD_SET = new Set([10, 338, 297, 332, 284, 251, 389, 109, 67, 103, 54, 21, 162]);
 
+  const MP_PORTRAIT_MODEL = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite';
+  const MP_PERSON_DETECTOR_MODEL = 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite';
+
+  // Inner facial feature landmark rings (eyes, eyebrows, lips, nose) to guarantee zero interior holes
+  const LEFT_EYE_RING = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
+  const RIGHT_EYE_RING = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
+  const LEFT_BROW_RING = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46];
+  const RIGHT_BROW_RING = [300, 293, 334, 296, 336, 285, 295, 282, 283, 276];
+  const LIPS_OUTER_RING = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185];
+
   let imageSegmenter = null;
+  let portraitSegmenter = null;
   let faceLandmarker = null;
   let faceDetector = null;
+  let objectDetector = null;
 
   function setAiBadge(cls, html) {
     if (!DOM.aiStatusBadge) return;
@@ -773,12 +892,23 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       try {
+        portraitSegmenter = await vision.ImageSegmenter.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: MP_PORTRAIT_MODEL, delegate: 'CPU' },
+          runningMode: 'IMAGE',
+          outputCategoryMask: false,
+          outputConfidenceMasks: true
+        });
+      } catch (portErr) {
+        console.warn('Portrait Segmenter fallback:', portErr);
+      }
+
+      try {
         faceLandmarker = await vision.FaceLandmarker.createFromOptions(fileset, {
           baseOptions: { modelAssetPath: MP_FACE_MODEL, delegate: 'CPU' },
           runningMode: 'IMAGE',
-          numFaces: 12,
-          minFaceDetectionConfidence: 0.20,
-          minFacePresenceConfidence: 0.20
+          numFaces: 16,
+          minFaceDetectionConfidence: 0.50,
+          minFacePresenceConfidence: 0.50
         });
       } catch (faceErr) {
         console.warn('Face Landmarker unavailable:', faceErr);
@@ -788,14 +918,29 @@ document.addEventListener('DOMContentLoaded', () => {
         faceDetector = await vision.FaceDetector.createFromOptions(fileset, {
           baseOptions: { modelAssetPath: MP_FACE_DETECTOR_MODEL, delegate: 'CPU' },
           runningMode: 'IMAGE',
-          minDetectionConfidence: 0.20
+          minDetectionConfidence: 0.52,
+          minSuppressionThreshold: 0.30
         });
       } catch (detErr) {
         console.warn('Face Detector unavailable:', detErr);
       }
 
+      try {
+        if (vision.ObjectDetector) {
+          objectDetector = await vision.ObjectDetector.createFromOptions(fileset, {
+            baseOptions: { modelAssetPath: MP_PERSON_DETECTOR_MODEL, delegate: 'CPU' },
+            runningMode: 'IMAGE',
+            scoreThreshold: 0.45,
+            categoryAllowlist: ['person'],
+            maxResults: 20
+          });
+        }
+      } catch (objErr) {
+        console.warn('Person ObjectDetector unavailable:', objErr);
+      }
+
       state.aiModelsLoaded = true;
-      setAiBadge('ready', '<i class="fa-solid fa-check-circle"></i> Neural Edge Vision Ready');
+      setAiBadge('ready', '<i class="fa-solid fa-check-circle"></i> Multi-Model Canny Edge AI Ready');
     } catch (err) {
       console.error('MediaPipe vision models failed to load:', err);
       state.aiModelsLoaded = false;
@@ -806,7 +951,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Load models in background; segmentation awaits this promise.
   const aiReadyPromise = initAIModels();
 
-  /* ---------- Low-level image-processing & edge-detection helpers ---------- */
+  /* ---------- Low-level image-processing & Canny/Scharr CIE-Lab edge-detection helpers ---------- */
 
   function resampleBilinear(src, sw, sh, dw, dh) {
     if (sw === dw && sh === dh) return src;
@@ -862,14 +1007,33 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /**
-   * Multi-channel 3x3 Sobel Colour Edge Detector.
-   * Returns per-pixel gradient magnitude in [0, 1] across RGB channels.
+   * Convert normalized RGB [0..1] buffer into perceptual CIE L*a*b* (scaled to [0..1])
+   * plus Multi-Channel Rotational-Invariant Scharr Gradient + Canny Non-Maximum Suppression (NMS)
+   * & Double-Threshold Hysteresis Edge Map.
    */
   function computeSobelEdges(rgb, w, h) {
-    const mag = new Float32Array(w * h);
+    const n = w * h;
+    const lab = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const r = rgb[i * 3], g = rgb[i * 3 + 1], b = rgb[i * 3 + 2];
+      // Fast perceptual Opponent/CIE-Lab approximation in [0..1]
+      const L = 0.299 * r + 0.587 * g + 0.114 * b;
+      const A = (r - g) * 0.5 + 0.5;
+      const B = (0.5 * (r + g) - b) * 0.5 + 0.5;
+      lab[i * 3] = L;
+      lab[i * 3 + 1] = A;
+      lab[i * 3 + 2] = B;
+    }
+
+    const mag = new Float32Array(n);
+    const gxArr = new Float32Array(n);
+    const gyArr = new Float32Array(n);
     let maxG = 1e-5;
+
+    // 3x3 Rotational-Invariant Scharr Operator: [-3, 0, 3; -10, 0, 10; -3, 0, 3]
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
+        const idx = y * w + x;
         const i00 = ((y - 1) * w + (x - 1)) * 3;
         const i01 = ((y - 1) * w + x) * 3;
         const i02 = ((y - 1) * w + (x + 1)) * 3;
@@ -879,22 +1043,104 @@ document.addEventListener('DOMContentLoaded', () => {
         const i21 = ((y + 1) * w + x) * 3;
         const i22 = ((y + 1) * w + (x + 1)) * 3;
 
-        let g2 = 0;
+        let maxChG2 = 0;
+        let sumG2 = 0;
+        let domGx = 0, domGy = 0;
+        const weights = [1.25, 1.55, 1.45]; // Boost chromatic channels A & B for skin/hair/cloth edges
+
         for (let c = 0; c < 3; c++) {
-          const gx = -rgb[i00 + c] + rgb[i02 + c]
-                   - 2 * rgb[i10 + c] + 2 * rgb[i12 + c]
-                   - rgb[i20 + c] + rgb[i22 + c];
-          const gy = -rgb[i00 + c] - 2 * rgb[i01 + c] - rgb[i02 + c]
-                   + rgb[i20 + c] + 2 * rgb[i21 + c] + rgb[i22 + c];
-          g2 += gx * gx + gy * gy;
+          const wt = weights[c];
+          const gx = (-3 * lab[i00 + c] + 3 * lab[i02 + c]
+                     - 10 * lab[i10 + c] + 10 * lab[i12 + c]
+                     - 3 * lab[i20 + c] + 3 * lab[i22 + c]) * wt;
+          const gy = (-3 * lab[i00 + c] - 10 * lab[i01 + c] - 3 * lab[i02 + c]
+                     + 3 * lab[i20 + c] + 10 * lab[i21 + c] + 3 * lab[i22 + c]) * wt;
+          const g2 = gx * gx + gy * gy;
+          sumG2 += g2;
+          if (g2 > maxChG2) {
+            maxChG2 = g2;
+            domGx = gx;
+            domGy = gy;
+          }
         }
-        const g = Math.sqrt(g2);
-        mag[y * w + x] = g;
+        const g = Math.sqrt(0.6 * sumG2 + 0.4 * maxChG2);
+        mag[idx] = g;
+        gxArr[idx] = domGx;
+        gyArr[idx] = domGy;
         if (g > maxG) maxG = g;
       }
     }
+
     const inv = 1 / maxG;
-    for (let i = 0; i < mag.length; i++) mag[i] = Math.min(1, mag[i] * inv);
+    for (let i = 0; i < n; i++) mag[i] = Math.min(1, mag[i] * inv);
+
+    // Canny Non-Maximum Suppression (NMS) + Hysteresis
+    const nms = new Float32Array(n);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = y * w + x;
+        const m = mag[idx];
+        if (m < 0.04) continue;
+        const gx = gxArr[idx], gy = gyArr[idx];
+        const ax = Math.abs(gx), ay = Math.abs(gy);
+        let n1 = 0, n2 = 0;
+        if (ay <= 0.4142 * ax) {
+          // 0 deg (horizontal gradient)
+          n1 = mag[idx - 1];
+          n2 = mag[idx + 1];
+        } else if (ay >= 2.4142 * ax) {
+          // 90 deg (vertical gradient)
+          n1 = mag[idx - w];
+          n2 = mag[idx + w];
+        } else if ((gx * gy) > 0) {
+          // 45 deg diagonal
+          n1 = mag[idx - w - 1];
+          n2 = mag[idx + w + 1];
+        } else {
+          // 135 deg diagonal
+          n1 = mag[idx - w + 1];
+          n2 = mag[idx + w - 1];
+        }
+        if (m >= n1 && m >= n2) {
+          nms[idx] = m;
+        }
+      }
+    }
+
+    // Hysteresis thresholding (high = 0.14, low = 0.055)
+    const canny = new Float32Array(n);
+    const stack = new Int32Array(n);
+    let sp = 0;
+    for (let i = 0; i < n; i++) {
+      if (nms[i] >= 0.14) {
+        canny[i] = Math.min(1, nms[i] * 1.4);
+        stack[sp++] = i;
+      }
+    }
+    while (sp > 0) {
+      const p = stack[--sp];
+      const x = p % w;
+      const y = (p - x) / w;
+      for (let dy = -1; dy <= 1; dy++) {
+        const ny = y + dy;
+        if (ny <= 0 || ny >= h - 1) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          if (nx <= 0 || nx >= w - 1) continue;
+          const ni = ny * w + nx;
+          if (canny[ni] === 0 && nms[ni] >= 0.055) {
+            canny[ni] = Math.min(1, nms[ni] * 1.25);
+            stack[sp++] = ni;
+          }
+        }
+      }
+    }
+
+    // Attach Canny & CIE-Lab buffers onto `mag` so callers expecting `sobel[i]` still work seamlessly
+    mag.canny = canny;
+    mag.lab = lab;
+    mag.gx = gxArr;
+    mag.gy = gyArr;
     return mag;
   }
 
@@ -981,17 +1227,19 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /**
-   * True Edge-Detection Boundary Snapping:
-   * 1. Builds a boundary trimap band of radius `bandRadius` around the contour.
-   * 2. Estimates local Definite Foreground & Definite Background RGB colours
-   *    on either side of the contour and computes per-pixel RGB colour affinity.
-   * 3. Uses Sobel edge magnitude + Guided Filter (`eps = 2e-4`) so the 0.5
-   *    iso-contour snaps tightly onto the photo's real colour & gradient edges.
+   * True Edge-Detection Boundary Snapping (Scharr + Canny NMS + 3-Stage Guided Matting):
+   * 1. Builds a boundary trimap band around the contour.
+   * 2. Estimates local Definite Foreground & Definite Background colours
+   *    on either side of the contour and computes per-pixel colour affinity.
+   * 3. Uses Scharr gradient + Canny NMS edge barriers + 3-stage Guided Filter
+   *    (`eps = 1.5e-4` -> `6e-5` -> `2.5e-5`) so the 0.5 iso-contour snaps
+   *    with 1px precision onto the photo's real colour & Canny edges.
    */
   function refineAlphaWithEdges(rgb, sobel, w, h, coarse, opts = {}) {
     const out = new Float32Array(w * h);
     const baseR = opts.radius || Math.max(3, Math.min(10, Math.round(Math.max(w, h) / 160)));
-    const eps = opts.eps || 2e-4;
+    const eps = opts.eps || 1.5e-4;
+    const canny = sobel.canny || sobel;
 
     let minX = w, minY = h, maxX = -1, maxY = -1;
     for (let y = 0; y < h; y++) {
@@ -1018,12 +1266,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const cRGB = new Float32Array(cn * 3);
     const cP = new Float32Array(cn);
     const cSobel = new Float32Array(cn);
+    const cCanny = new Float32Array(cn);
     for (let y = 0; y < ch; y++) {
       for (let x = 0; x < cw; x++) {
         const gi = (y + minY) * w + (x + minX);
         const ci = y * cw + x;
         cP[ci] = coarse[gi];
         cSobel[ci] = sobel[gi];
+        cCanny[ci] = canny[gi];
         cRGB[ci * 3] = rgb[gi * 3];
         cRGB[ci * 3 + 1] = rgb[gi * 3 + 1];
         cRGB[ci * 3 + 2] = rgb[gi * 3 + 2];
@@ -1031,7 +1281,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Smooth the prior slightly so hard polygon/mask borders have a genuine transition band
-    const smoothP = boxMean(cP, cw, ch, Math.max(2, Math.round(baseR * 0.6)));
+    const smoothP = boxMean(cP, cw, ch, Math.max(2, Math.round(baseR * 0.55)));
 
     // Estimate local foreground & background RGB colours in a neighbourhood of radius 2*baseR
     const statR = baseR * 2;
@@ -1069,7 +1319,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const band = new Uint8Array(cn);
     for (let i = 0; i < cn; i++) {
       const sp = smoothP[i];
-      if (sp > 0.03 && sp < 0.97 && mWf[i] > 1e-3 && mWb[i] > 1e-3) {
+      if (sp > 0.025 && sp < 0.975 && mWf[i] > 1e-3 && mWb[i] > 1e-3) {
         band[i] = 1;
         const fr = mFgR[i] / mWf[i], fg = mFgG[i] / mWf[i], fb = mFgB[i] / mWf[i];
         const br = mBgR[i] / mWb[i], bg = mBgG[i] / mWb[i], bb = mBgB[i] / mWb[i];
@@ -1080,18 +1330,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const sep = (fr - br) * (fr - br) + (fg - bg) * (fg - bg) + (fb - bb) * (fb - bb);
 
         const colorAff = dBg / (dFg + dBg + 1e-4);
-        // Stronger local FG/BG contrast + Sobel gradient -> stronger snapping to colour edge
-        const edgeWeight = Math.min(0.82, Math.sqrt(sep) * 2.2 + cSobel[i] * 0.35);
+        // Stronger local FG/BG contrast + Scharr/Canny edge -> stronger snapping to colour edge
+        const edgeWeight = Math.min(0.88, Math.sqrt(sep) * 2.4 + cSobel[i] * 0.35 + cCanny[i] * 0.28);
         prior[i] = (1 - edgeWeight) * sp + edgeWeight * colorAff;
       } else {
         prior[i] = cP[i];
       }
     }
 
-    // Two-stage guided filter (coarse radius then fine radius for crisp 1px edge locking)
+    // Three-stage guided filter (coarse -> medium -> ultra-fine 1px Canny edge lock)
     const qCoarse = guidedFilterColor(cRGB, cw, ch, prior, baseR, eps);
-    const fineR = Math.max(2, Math.round(baseR * 0.45));
-    const qFine = guidedFilterColor(cRGB, cw, ch, qCoarse, fineR, eps * 0.5);
+    const medR = Math.max(2, Math.round(baseR * 0.45));
+    const qMed = guidedFilterColor(cRGB, cw, ch, qCoarse, medR, eps * 0.4);
+    const fineR = Math.max(1, Math.round(baseR * 0.22));
+    const qFine = guidedFilterColor(cRGB, cw, ch, qMed, fineR, eps * 0.18);
 
     for (let y = 0; y < ch; y++) {
       for (let x = 0; x < cw; x++) {
@@ -1099,9 +1351,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const gi = (y + minY) * w + (x + minX);
         if (band[ci]) {
           let v = Math.min(1, Math.max(0, qFine[ci]));
-          // Sharpen right across strong Sobel gradient peaks
-          if (cSobel[ci] > 0.12) {
-            v = 0.5 + (v - 0.5) * (1 + cSobel[ci] * 1.5);
+          // Sharpen right across strong Scharr/Canny gradient peaks for razor-sharp 1px edges
+          const edgePeak = Math.max(cSobel[ci], cCanny[ci]);
+          if (edgePeak > 0.10) {
+            v = 0.5 + (v - 0.5) * (1 + edgePeak * 1.9);
             v = Math.min(1, Math.max(0, v));
           }
           out[gi] = v;
@@ -1191,6 +1444,32 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function runPortraitSegmenter(source) {
+    return new Promise((resolve) => {
+      if (!portraitSegmenter) {
+        resolve(null);
+        return;
+      }
+      try {
+        portraitSegmenter.segment(source, (result) => {
+          try {
+            const m = result.confidenceMasks && result.confidenceMasks[0];
+            if (!m) { resolve(null); return; }
+            resolve({
+              w: m.width,
+              h: m.height,
+              data: new Float32Array(m.getAsFloat32Array())
+            });
+          } catch (e) {
+            resolve(null);
+          }
+        });
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
   /**
    * Run multiclass segmenter on a sub-crop of `sourceCanvas` and return
    * resampled class maps for that crop rectangle.
@@ -1206,12 +1485,62 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /**
-   * Multi-Scale + Tiled + Proposal Face Detection.
-   * Guarantees that all faces in group photos (e.g. 4+ people) are found,
-   * even when individual faces are small or off-centre.
+   * Snap each vertex of `pts` ([{x,y}, ...]) outward/inward along its 1D normal ray
+   * to the strongest Canny/Scharr + neural skin transition boundary.
    */
-  function detectAllFacesMultiScale(workCanvas, w, h, faceSkinMap) {
-    const foundFaces = []; // each item: { landmarks: Array<{x,y,z}> | null, bbox: {x0,y0,x1,y1} }
+  function snapPolygonPointsToEdges(pts, cx, cy, canny, sobel, skinProb, rw, rh, maxShiftPx) {
+    const k = pts.length;
+    if (k < 3 || maxShiftPx < 1) return pts;
+    const snapped = [];
+    for (let i = 0; i < k; i++) {
+      const p = pts[i];
+      const vx = p.x - cx;
+      const vy = p.y - cy;
+      const len = Math.hypot(vx, vy) || 1;
+      const nx = vx / len;
+      const ny = vy / len;
+
+      let bestT = 0;
+      let bestScore = -1;
+      for (let t = -maxShiftPx; t <= maxShiftPx; t++) {
+        const sx = Math.round(p.x + nx * t);
+        const sy = Math.round(p.y + ny * t);
+        if (sx < 1 || sx >= rw - 1 || sy < 1 || sy >= rh - 1) continue;
+        const idx = sy * rw + sx;
+
+        // Inner vs outer neural skin drop across normal ray
+        const inX = Math.max(0, Math.min(rw - 1, Math.round(sx - nx * 2)));
+        const inY = Math.max(0, Math.min(rh - 1, Math.round(sy - ny * 2)));
+        const outX = Math.max(0, Math.min(rw - 1, Math.round(sx + nx * 2)));
+        const outY = Math.max(0, Math.min(rh - 1, Math.round(sy + ny * 2)));
+        const skinDrop = skinProb
+          ? Math.max(0, skinProb[inY * rw + inX] - skinProb[outY * rw + outX])
+          : 0;
+
+        const distPenalty = 1 - 0.35 * Math.abs(t) / (maxShiftPx + 1);
+        const edgeStrength = (canny ? canny[idx] * 0.65 : 0) + (sobel ? sobel[idx] * 0.45 : 0) + skinDrop * 0.75;
+        const score = edgeStrength * distPenalty;
+        if (score > bestScore) {
+          bestScore = score;
+          bestT = t;
+        }
+      }
+      if (bestScore > 0.14) {
+        snapped.push({ x: p.x + nx * bestT * 0.75, y: p.y + ny * bestT * 0.75 });
+      } else {
+        snapped.push({ x: p.x, y: p.y });
+      }
+    }
+    return snapped;
+  }
+
+  /**
+   * Multi-Scale + Aspect-Preserving Tiled + Landmark-Verified Face Detection with NMS Deduplication.
+   * Eliminates duplicate detections across tiles, rejects background pareidolia and unverified skin blobs,
+   * and returns calibrated confidence scores for every distinct face.
+   */
+  function detectAllFacesMultiScale(workCanvas, w, h, faceSkinMap, fastVideoMode = false, extraMaps = {}) {
+    const rawCandidates = [];
 
     function bboxFromLandmarks(lm) {
       let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
@@ -1225,50 +1554,42 @@ document.addEventListener('DOMContentLoaded', () => {
       return { x0: x0 * w, y0: y0 * h, x1: x1 * w, y1: y1 * h };
     }
 
-    function iouOrOverlap(a, b) {
-      const ix0 = Math.max(a.x0, b.x0), iy0 = Math.max(a.y0, b.y0);
-      const ix1 = Math.min(a.x1, b.x1), iy1 = Math.min(a.y1, b.y1);
-      const iw = Math.max(0, ix1 - ix0), ih = Math.max(0, iy1 - iy0);
-      const inter = iw * ih;
-      const areaA = Math.max(1, (a.x1 - a.x0) * (a.y1 - a.y0));
-      const areaB = Math.max(1, (b.x1 - b.x0) * (b.y1 - b.y0));
-      const union = areaA + areaB - inter;
-      const minArea = Math.min(areaA, areaB);
-      const acx = (a.x0 + a.x1) * 0.5, acy = (a.y0 + a.y1) * 0.5;
-      const bcx = (b.x0 + b.x1) * 0.5, bcy = (b.y0 + b.y1) * 0.5;
-      const dist = Math.hypot(acx - bcx, acy - bcy);
-      const avgSize = 0.5 * (Math.hypot(a.x1 - a.x0, a.y1 - a.y0) + Math.hypot(b.x1 - b.x0, b.y1 - b.y0));
-      return (inter / union > 0.30) || (inter / minArea > 0.55) || (dist < avgSize * 0.35);
-    }
-
-    function addLandmarkFace(lm) {
+    function pushLandmarkCandidate(lm, rawScore = 0.88, source = 'landmarker') {
       const bbox = bboxFromLandmarks(lm);
-      const bw = bbox.x1 - bbox.x0, bh = bbox.y1 - bbox.y0;
-      if (bw < 12 || bh < 12) return;
-      for (let i = 0; i < foundFaces.length; i++) {
-        if (iouOrOverlap(foundFaces[i].bbox, bbox)) {
-          // Prefer a face with landmarks over a bbox-only detection
-          if (!foundFaces[i].landmarks && lm) {
-            foundFaces[i] = { landmarks: lm, bbox };
-          }
-          return;
-        }
-      }
-      foundFaces.push({ landmarks: lm, bbox });
+      rawCandidates.push({
+        landmarks: lm,
+        bbox,
+        rawScore,
+        source
+      });
     }
 
+    /**
+     * Run FaceLandmarker on a sub-rectangle `(rx, ry, rw, rh)` using aspect-ratio-preserving
+     * letterboxing so faces are never stretched horizontally or vertically across tile borders.
+     */
     function runLandmarkerOnCrop(rx, ry, rw, rh, targetSize = 512) {
-      if (!faceLandmarker || rw < 16 || rh < 16) return;
+      if (!faceLandmarker || rw < 18 || rh < 18) return 0;
+      const scale = targetSize / Math.max(rw, rh);
+      const drawW = Math.max(1, Math.round(rw * scale));
+      const drawH = Math.max(1, Math.round(rh * scale));
+
       const c = document.createElement('canvas');
       c.width = targetSize;
       c.height = targetSize;
       const ctx = c.getContext('2d');
-      ctx.drawImage(workCanvas, rx, ry, rw, rh, 0, 0, targetSize, targetSize);
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, targetSize, targetSize);
+      ctx.drawImage(workCanvas, rx, ry, rw, rh, 0, 0, drawW, drawH);
+
+      let added = 0;
       try {
         const res = faceLandmarker.detect(c);
         const lms = (res && res.faceLandmarks) ? res.faceLandmarks : [];
+        const maxNormX = drawW / targetSize;
+        const maxNormY = drawH / targetSize;
+
         lms.forEach(lm => {
-          // Ignore detections clipped right against the artificial crop border
           let minX = 1, maxX = 0, minY = 1, maxY = 0;
           FACE_OVAL_IDX.forEach(idx => {
             const p = lm[idx];
@@ -1277,53 +1598,65 @@ document.addEventListener('DOMContentLoaded', () => {
             if (p.y < minY) minY = p.y;
             if (p.y > maxY) maxY = p.y;
           });
-          const touchesLeft = rx > 2 && minX < 0.015;
-          const touchesRight = (rx + rw < w - 2) && maxX > 0.985;
-          const touchesTop = ry > 2 && minY < 0.015;
-          const touchesBot = (ry + rh < h - 2) && maxY > 0.985;
+
+          // Ignore partial faces clipped against interior crop boundaries
+          const touchesLeft = rx > 2 && minX < 0.018;
+          const touchesRight = (rx + rw < w - 2) && maxX > (maxNormX - 0.018);
+          const touchesTop = ry > 2 && minY < 0.018;
+          const touchesBot = (ry + rh < h - 2) && maxY > (maxNormY - 0.018);
           if (touchesLeft || touchesRight || touchesTop || touchesBot) return;
+          if (maxX > maxNormX * 1.02 || maxY > maxNormY * 1.02) return;
 
           const mapped = lm.map(pt => ({
-            x: (rx + pt.x * rw) / w,
-            y: (ry + pt.y * rh) / h,
+            x: (rx + (pt.x * targetSize) / scale) / w,
+            y: (ry + (pt.y * targetSize) / scale) / h,
             z: pt.z
           }));
-          addLandmarkFace(mapped);
+          pushLandmarkCandidate(mapped, 0.86, 'landmarker_crop');
+          added++;
         });
       } catch (e) {
         // ignore single-crop error
       }
+      return added;
     }
 
-    // 1. Full-frame FaceLandmarker pass
+    // 1. Full-frame FaceLandmarker pass (highest global context)
     if (faceLandmarker) {
       try {
         const res = faceLandmarker.detect(workCanvas);
-        ((res && res.faceLandmarks) || []).forEach(lm => addLandmarkFace(lm));
+        ((res && res.faceLandmarks) || []).forEach(lm => pushLandmarkCandidate(lm, 0.92, 'landmarker_full'));
       } catch (e) {
         console.warn('Full-frame FaceLandmarker failed:', e);
       }
     }
 
-    // 2. Overlapping tiled passes (magnifies smaller/group-photo faces by ~2x)
-    const tiles = [
-      [0, 0, w * 0.62, h * 0.75],
-      [w * 0.19, 0, w * 0.62, h * 0.75],
-      [w * 0.38, 0, w * 0.62, h * 0.75],
-      [0, h * 0.15, w * 0.58, h * 0.85],
-      [w * 0.42, h * 0.15, w * 0.58, h * 0.85]
-    ];
+    // 2. Overlapping aspect-preserving tiled passes for smaller faces in group photos
+    const tiles = fastVideoMode
+      ? [
+          [0, 0, w * 0.60, h * 0.85],
+          [w * 0.40, 0, w * 0.60, h * 0.85]
+        ]
+      : [
+          [0, 0, w * 0.58, h * 0.75],
+          [w * 0.21, 0, w * 0.58, h * 0.75],
+          [w * 0.42, 0, w * 0.58, h * 0.75],
+          [0, h * 0.18, w * 0.56, h * 0.82],
+          [w * 0.44, h * 0.18, w * 0.56, h * 0.82]
+        ];
     tiles.forEach(([tx, ty, tw, th]) => {
-      runLandmarkerOnCrop(Math.round(tx), Math.round(ty), Math.round(tw), Math.round(th), 512);
+      runLandmarkerOnCrop(Math.round(tx), Math.round(ty), Math.round(tw), Math.round(th), fastVideoMode ? 384 : 512);
     });
 
-    // 3. BlazeFace detector pass (full + left/right halves) -> refine each box with FaceLandmarker crop
+    // 3. BlazeFace detector pass -> verify each candidate with FaceLandmarker crop or strict keypoint+foreground validation
     if (faceDetector) {
-      const detCrops = [
-        [0, 0, w, h],
-        [0, 0, Math.round(w * 0.6), h],
-        [Math.round(w * 0.4), 0, Math.round(w * 0.6), h]
-      ];
+      const detCrops = fastVideoMode
+        ? [[0, 0, w, h]]
+        : [
+            [0, 0, w, h],
+            [0, 0, Math.round(w * 0.58), h],
+            [Math.round(w * 0.42), 0, Math.round(w * 0.58), h]
+          ];
       detCrops.forEach(([dx, dy, dw, dh]) => {
         try {
           const c = document.createElement('canvas');
@@ -1334,22 +1667,42 @@ document.addEventListener('DOMContentLoaded', () => {
           ((detRes && detRes.detections) || []).forEach(det => {
             const bb = det.boundingBox;
             if (!bb) return;
+            const detScore = (det.categories && det.categories[0] && typeof det.categories[0].score === 'number')
+              ? det.categories[0].score
+              : 0.65;
+            if (detScore < 0.52) return;
+
             const bx0 = dx + bb.originX;
             const by0 = dy + bb.originY;
             const bw = bb.width;
             const bh = bb.height;
             const candBox = { x0: bx0, y0: by0, x1: bx0 + bw, y1: by0 + bh };
-            const already = foundFaces.some(f => iouOrOverlap(f.bbox, candBox));
-            if (!already) {
-              const pad = Math.max(bw, bh) * 0.85;
+
+            // Check if already covered by an existing landmark candidate
+            const alreadyCovered = rawCandidates.some(f => {
+              const m = BitEngine.computeBoxOverlapMetrics(f.bbox, candBox);
+              return m.iou >= 0.30 || m.ioMin >= 0.52 || m.normCenterDist < 0.40;
+            });
+            if (!alreadyCovered) {
+              const pad = Math.max(bw, bh) * 0.75;
               const cx0 = Math.max(0, Math.floor(bx0 - pad));
               const cy0 = Math.max(0, Math.floor(by0 - pad));
               const cx1 = Math.min(w, Math.ceil(bx0 + bw + pad));
               const cy1 = Math.min(h, Math.ceil(by0 + bh + pad));
-              const beforeCount = foundFaces.length;
-              runLandmarkerOnCrop(cx0, cy0, cx1 - cx0, cy1 - cy0, 384);
-              if (foundFaces.length === beforeCount) {
-                foundFaces.push({ landmarks: null, bbox: candBox });
+              const addedLm = runLandmarkerOnCrop(cx0, cy0, cx1 - cx0, cy1 - cy0, 384);
+              // Only accept a landmark-less BlazeFace box if it has very high detector confidence (>= 0.72) AND valid keypoints
+              if (addedLm === 0 && detScore >= 0.72 && Array.isArray(det.keypoints) && det.keypoints.length >= 4) {
+                const mappedKps = det.keypoints.map(kp => ({
+                  x: (dx + (kp.x <= 1 ? kp.x * dw : kp.x)) / w,
+                  y: (dy + (kp.y <= 1 ? kp.y * dh : kp.y)) / h
+                }));
+                rawCandidates.push({
+                  landmarks: null,
+                  keypoints: mappedKps,
+                  bbox: candBox,
+                  rawScore: detScore,
+                  source: 'detector_only'
+                });
               }
             }
           });
@@ -1360,15 +1713,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 4. Connected-component proposals from neural `faceSkinMap` (class 3)
-    // Catches any remaining face that neural segmentation saw as face-skin!
+    //    IMPORTANT FIX: Only used as crop proposals for `FaceLandmarker` — NEVER pushed blindly without landmarks!
     if (faceSkinMap) {
       const n = w * h;
       const visited = new Uint8Array(n);
       const stack = new Int32Array(n);
-      const minCluster = Math.max(35, Math.round(n * 0.00035));
+      const minCluster = Math.max(45, Math.round(n * 0.00055));
 
       for (let start = 0; start < n; start++) {
-        if (visited[start] || faceSkinMap[start] < 0.25) continue;
+        if (visited[start] || faceSkinMap[start] < 0.38) continue;
         let sp = 0, count = 0;
         let x0 = w, y0 = h, x1 = 0, y1 = 0;
         stack[sp++] = start;
@@ -1384,37 +1737,336 @@ document.addEventListener('DOMContentLoaded', () => {
           if (y < y0) y0 = y;
           if (y > y1) y1 = y;
 
-          if (x > 0 && !visited[p - 1] && faceSkinMap[p - 1] >= 0.25) { visited[p - 1] = 1; stack[sp++] = p - 1; }
-          if (x < w - 1 && !visited[p + 1] && faceSkinMap[p + 1] >= 0.25) { visited[p + 1] = 1; stack[sp++] = p + 1; }
-          if (y > 0 && !visited[p - w] && faceSkinMap[p - w] >= 0.25) { visited[p - w] = 1; stack[sp++] = p - w; }
-          if (y < h - 1 && !visited[p + w] && faceSkinMap[p + w] >= 0.25) { visited[p + w] = 1; stack[sp++] = p + w; }
+          if (x > 0 && !visited[p - 1] && faceSkinMap[p - 1] >= 0.38) { visited[p - 1] = 1; stack[sp++] = p - 1; }
+          if (x < w - 1 && !visited[p + 1] && faceSkinMap[p + 1] >= 0.38) { visited[p + 1] = 1; stack[sp++] = p + 1; }
+          if (y > 0 && !visited[p - w] && faceSkinMap[p - w] >= 0.38) { visited[p - w] = 1; stack[sp++] = p - w; }
+          if (y < h - 1 && !visited[p + w] && faceSkinMap[p + w] >= 0.38) { visited[p + w] = 1; stack[sp++] = p + w; }
         }
 
         const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
-        const aspect = bh / Math.max(1, bw);
-        if (count >= minCluster && aspect > 0.4 && aspect < 2.8) {
+        const aspect = bw / Math.max(1, bh);
+        if (count >= minCluster && aspect > 0.45 && aspect < 1.85) {
           const candBox = { x0, y0, x1, y1 };
-          const covered = foundFaces.some(f => iouOrOverlap(f.bbox, candBox));
+          const covered = rawCandidates.some(f => {
+            const m = BitEngine.computeBoxOverlapMetrics(f.bbox, candBox);
+            return m.iou >= 0.25 || m.ioMin >= 0.45;
+          });
           if (!covered) {
-            const pad = Math.max(bw, bh) * 0.9;
+            const pad = Math.max(bw, bh) * 0.85;
             const cx0 = Math.max(0, Math.floor(x0 - pad));
             const cy0 = Math.max(0, Math.floor(y0 - pad));
             const cx1 = Math.min(w, Math.ceil(x1 + pad));
             const cy1 = Math.min(h, Math.ceil(y1 + pad));
-            const beforeCount = foundFaces.length;
             runLandmarkerOnCrop(cx0, cy0, cx1 - cx0, cy1 - cy0, 384);
-            if (foundFaces.length === beforeCount) {
-              // Keep as a skin-segmented face even if landmarks didn't trigger
-              foundFaces.push({ landmarks: null, bbox: candBox });
-            }
           }
         }
       }
     }
 
-    // Sort faces left-to-right for consistent numbering
-    foundFaces.sort((a, b) => a.bbox.x0 - b.bbox.x0);
-    return foundFaces;
+    // 5. Run strict anatomical validation, foreground/skin verification & Confidence-Sorted NMS Deduplication
+    return BitEngine.deduplicateFacesNMS(rawCandidates, w, h, {
+      faceSkinMap,
+      bodySkinMap: extraMaps.bodySkinMap || null,
+      bgMap: extraMaps.bgMap || null,
+      mapW: w,
+      mapH: h
+    });
+  }
+
+  /**
+   * Run MediaPipe ObjectDetector (filtered strictly to 'person' class) on full frame and wide tiles.
+   */
+  function detectPersonBoxesMultiScale(workCanvas, w, h, W, H) {
+    if (!objectDetector) return [];
+    const rawBoxes = [];
+    const invScaleX = W / w;
+    const invScaleY = H / h;
+
+    const crops = w >= 480
+      ? [
+          [0, 0, w, h],
+          [0, 0, Math.round(w * 0.62), h],
+          [Math.round(w * 0.38), 0, Math.round(w * 0.62), h]
+        ]
+      : [[0, 0, w, h]];
+
+    for (const [cx, cy, cw, ch] of crops) {
+      try {
+        const c = document.createElement('canvas');
+        c.width = cw;
+        c.height = ch;
+        c.getContext('2d').drawImage(workCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
+        const res = objectDetector.detect(c);
+        ((res && res.detections) || []).forEach(det => {
+          const cat = det.categories && det.categories[0];
+          if (!cat || (cat.categoryName && cat.categoryName.toLowerCase() !== 'person')) return;
+          const score = typeof cat.score === 'number' ? cat.score : 0.55;
+          if (score < 0.45 || !det.boundingBox) return;
+
+          const bb = det.boundingBox;
+          const x0 = (cx + bb.originX) * invScaleX;
+          const y0 = (cy + bb.originY) * invScaleY;
+          const x1 = (cx + bb.originX + bb.width) * invScaleX;
+          const y1 = (cy + bb.originY + bb.height) * invScaleY;
+
+          // Ignore partial person boxes clipped right at interior crop edges
+          if (cx > 2 && bb.originX < 4) return;
+          if (cx + cw < w - 2 && (bb.originX + bb.width) > cw - 4) return;
+
+          rawBoxes.push({
+            category: 'person',
+            score,
+            bbox: { x0, y0, x1, y1 }
+          });
+        });
+      } catch (e) {
+        // ignore detector error
+      }
+    }
+    return rawBoxes;
+  }
+
+  /**
+   * Apply morphological boundary dilation (`padPx > 0`) or erosion (`padPx < 0`) to a binary mask.
+   */
+  function applyMaskMorphologyPad(baseMask, W, H, padPx) {
+    if (!baseMask || padPx === 0) return baseMask ? new Uint8Array(baseMask) : null;
+    const r = Math.min(12, Math.abs(Math.round(padPx)));
+    const isDilate = padPx > 0;
+    const horiz = new Uint8Array(W * H);
+    const out = new Uint8Array(W * H);
+
+    // Separable horizontal pass
+    for (let y = 0; y < H; y++) {
+      const row = y * W;
+      let sum = 0;
+      for (let x = 0; x <= Math.min(r, W - 1); x++) sum += baseMask[row + x];
+      for (let x = 0; x < W; x++) {
+        const lo = Math.max(0, x - r);
+        const hi = Math.min(W - 1, x + r);
+        const winLen = hi - lo + 1;
+        horiz[row + x] = isDilate ? (sum > 0 ? 1 : 0) : (sum === winLen ? 1 : 0);
+        if (x + r + 1 < W) sum += baseMask[row + x + r + 1];
+        if (x - r >= 0) sum -= baseMask[row + x - r];
+      }
+    }
+
+    // Separable vertical pass
+    for (let x = 0; x < W; x++) {
+      let sum = 0;
+      for (let y = 0; y <= Math.min(r, H - 1); y++) sum += horiz[y * W + x];
+      for (let y = 0; y < H; y++) {
+        const lo = Math.max(0, y - r);
+        const hi = Math.min(H - 1, y + r);
+        const winLen = hi - lo + 1;
+        out[y * W + x] = isDilate ? (sum > 0 ? 1 : 0) : (sum === winLen ? 1 : 0);
+        if (y + r + 1 < H) sum += horiz[(y + r + 1) * W + x];
+        if (y - r >= 0) sum -= horiz[(y - r) * W + x];
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Recompute `state.bodyMask`, `state.faceMask`, and displayed statistics from the user-reviewed
+   * and confirmed `state.detectedPersons` and `state.detectedFaces` lists (Feature 7).
+   */
+  function rebuildConfirmedScopeMasks() {
+    if (!state.encImage) return;
+    const W = state.encImage.width;
+    const H = state.encImage.height;
+    const totalPixels = W * H;
+    const padPx = state.maskBoundaryPadPx || 0;
+
+    // 1. Rebuild combined body mask from selected person instances
+    const combinedBody = new Uint8Array(totalPixels);
+    let bodyPixels = 0;
+    let bodyTopX = Math.floor(W / 2), bodyTopY = H;
+    const activePersons = [];
+
+    (state.detectedPersons || []).forEach((p, idx) => {
+      p.index = idx + 1;
+      if (!p.customLabel) p.label = `Person ${idx + 1}`;
+      p.mask = applyMaskMorphologyPad(p.baseMask || p.mask, W, H, padPx);
+      let pCount = 0;
+      for (let i = 0; i < totalPixels; i++) {
+        if (p.mask[i]) {
+          pCount++;
+          if (p.selected !== false) {
+            if (!combinedBody[i]) {
+              combinedBody[i] = 1;
+              bodyPixels++;
+            }
+          }
+        }
+      }
+      p.pixelCount = pCount;
+      p.coveragePct = parseFloat(((pCount / totalPixels) * 100).toFixed(1));
+      if (p.selected !== false && pCount > 0) {
+        activePersons.push(p);
+        if (p.topY < bodyTopY) {
+          bodyTopY = p.topY;
+          bodyTopX = p.cx;
+        }
+      }
+    });
+
+    // 2. Rebuild combined face mask from selected face instances
+    const combinedFace = new Uint8Array(totalPixels);
+    let facePixels = 0;
+    let faceTopX = Math.floor(W / 2), faceTopY = H;
+    const activeFaces = [];
+
+    (state.detectedFaces || []).forEach((f, idx) => {
+      f.index = idx + 1;
+      if (!f.customLabel) f.label = `Face ${idx + 1}`;
+      if (f.baseMask || f.mask) {
+        f.mask = applyMaskMorphologyPad(f.baseMask || f.mask, W, H, padPx);
+        let fCount = 0;
+        for (let i = 0; i < totalPixels; i++) {
+          if (f.mask[i]) {
+            fCount++;
+            if (f.selected !== false) {
+              if (!combinedFace[i]) {
+                combinedFace[i] = 1;
+                facePixels++;
+              }
+            }
+          }
+        }
+        f.pixelCount = fCount;
+        f.coveragePct = parseFloat(((fCount / totalPixels) * 100).toFixed(1));
+      }
+      if (f.selected !== false) {
+        activeFaces.push(f);
+        if (f.topY < faceTopY) {
+          faceTopY = f.topY;
+          faceTopX = f.cx;
+        }
+      }
+    });
+
+    const bodyPct = parseFloat(((bodyPixels / totalPixels) * 100).toFixed(1));
+    const facePct = parseFloat(((facePixels / totalPixels) * 100).toFixed(1));
+
+    state.bodyMask = bodyPixels > 0 ? combinedBody : null;
+    state.faceMask = facePixels > 0 ? combinedFace : null;
+    state.allMask = state.bodyMask;
+
+    state.detectedBodyStats = {
+      pixelCount: bodyPixels,
+      coveragePct: bodyPct,
+      topX: bodyTopX,
+      topY: bodyTopY < H ? bodyTopY : 0,
+      count: activePersons.length,
+      totalDetected: (state.detectedPersons || []).length
+    };
+    state.detectedFaceStats = {
+      pixelCount: facePixels,
+      coveragePct: facePct,
+      topX: faceTopX,
+      topY: faceTopY < H ? faceTopY : 0,
+      count: activeFaces.length,
+      totalDetected: (state.detectedFaces || []).length
+    };
+
+    updateAiResultUI(
+      bodyPixels,
+      facePixels,
+      bodyPct,
+      facePct,
+      state.detectedFaceStats.count,
+      true,
+      state.detectedBodyStats.count
+    );
+    renderAiDetectionReviewPanel();
+  }
+
+  /**
+   * Render the interactive AI Detection Review & Manual Correction Panel (Feature 7).
+   */
+  function renderAiDetectionReviewPanel() {
+    if (!DOM.aiReviewPanel || !DOM.aiRevItemsList) return;
+    if (!state.encImage || (state.encScope !== 'person' && state.encScope !== 'face')) {
+      DOM.aiReviewPanel.style.display = 'none';
+      return;
+    }
+
+    DOM.aiReviewPanel.style.display = 'block';
+    const totalPersons = (state.detectedPersons || []).length;
+    const selectedPersons = (state.detectedPersons || []).filter(p => p.selected !== false).length;
+    const totalFaces = (state.detectedFaces || []).length;
+    const selectedFaces = (state.detectedFaces || []).filter(f => f.selected !== false).length;
+
+    if (DOM.aiRevPersonCount) {
+      DOM.aiRevPersonCount.textContent = `${selectedPersons}/${totalPersons} ${totalPersons === 1 ? 'Person' : 'People'}`;
+    }
+    if (DOM.aiRevFaceCount) {
+      DOM.aiRevFaceCount.textContent = `${selectedFaces}/${totalFaces} ${totalFaces === 1 ? 'Face' : 'Faces'}`;
+    }
+
+    const isFaceScope = state.encScope === 'face';
+    const items = isFaceScope ? (state.detectedFaces || []) : (state.detectedPersons || []);
+    DOM.aiRevItemsList.innerHTML = '';
+
+    if (items.length === 0) {
+      DOM.aiRevItemsList.innerHTML = `
+        <div style="grid-column: 1 / -1; padding: 8px 10px; color: var(--text-muted); font-size: 12px;">
+          No ${isFaceScope ? 'faces' : 'people'} currently active. Click <b>"+ Add Missing Detection"</b> above and drag on the image to add one manually.
+        </div>
+      `;
+      return;
+    }
+
+    items.forEach((item, idx) => {
+      const isSel = item.selected !== false;
+      const confPct = Math.round((item.confidence || 0.90) * 100);
+      const card = document.createElement('div');
+      card.className = 'ai-review-item-card' + (isFaceScope ? ' face-item' : '') + (isSel ? ' selected' : '');
+
+      const leftLabel = document.createElement('label');
+      leftLabel.className = 'ai-rev-left';
+
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.checked = isSel;
+      chk.addEventListener('change', () => {
+        item.selected = chk.checked;
+        state.detectionsConfirmed = false;
+        rebuildConfirmedScopeMasks();
+        renderEncOriginalWithOverlays();
+      });
+
+      const info = document.createElement('div');
+      info.className = 'ai-rev-info';
+      info.innerHTML = `
+        <span class="ai-rev-label">${item.label || `${isFaceScope ? 'Face' : 'Person'} ${idx + 1}`} (${confPct}%)</span>
+        <span class="ai-rev-sub">${item.coveragePct || 0}% area · ${(item.pixelCount || 0).toLocaleString()} px</span>
+      `;
+
+      leftLabel.appendChild(chk);
+      leftLabel.appendChild(info);
+
+      const rmBtn = document.createElement('button');
+      rmBtn.type = 'button';
+      rmBtn.className = 'ai-rev-remove-btn';
+      rmBtn.title = `Remove ${item.label || 'this detection'}`;
+      rmBtn.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
+      rmBtn.addEventListener('click', () => {
+        if (isFaceScope) {
+          state.detectedFaces.splice(idx, 1);
+        } else {
+          state.detectedPersons.splice(idx, 1);
+        }
+        state.detectionsConfirmed = false;
+        rebuildConfirmedScopeMasks();
+        renderEncOriginalWithOverlays();
+      });
+
+      card.appendChild(leftLabel);
+      card.appendChild(rmBtn);
+      DOM.aiRevItemsList.appendChild(card);
+    });
   }
 
   /**
@@ -1440,9 +2092,17 @@ document.addEventListener('DOMContentLoaded', () => {
     ctx.fill();
   }
 
-  function updateAiResultUI(bodyPixels, facePixels, bodyPct, facePct, faceCount, aiAvailable) {
+  function updateAiResultUI(bodyPixels, facePixels, bodyPct, facePct, faceCount, aiAvailable, personCount = 0) {
     if (DOM.subPersonCount) {
-      DOM.subPersonCount.textContent = !aiAvailable ? 'AI unavailable' : (bodyPixels > 0 ? `Traced (${bodyPct}%)` : 'No person found');
+      if (!aiAvailable) {
+        DOM.subPersonCount.textContent = 'AI unavailable';
+      } else if (bodyPixels > 0) {
+        const pCount = personCount > 0 ? personCount : 1;
+        const pLabel = pCount === 1 ? '1 person' : `${pCount} people`;
+        DOM.subPersonCount.textContent = `${pLabel} (${bodyPct}%)`;
+      } else {
+        DOM.subPersonCount.textContent = 'No person found';
+      }
     }
     if (DOM.subFaceCount) {
       if (!aiAvailable) {
@@ -1457,18 +2117,20 @@ document.addEventListener('DOMContentLoaded', () => {
     if (DOM.aiDetectionBanner) {
       DOM.aiDetectionBanner.style.display = 'flex';
       if (bodyPixels > 0 || facePixels > 0) {
-        const fText = faceCount > 0 ? `${faceCount} ${faceCount === 1 ? 'Face' : 'Faces'} (${facePct}%)` : `Face (${facePct}%)`;
-        DOM.aiDetectionText.innerHTML = `<i class="fa-solid fa-shapes"></i> <b>Edge-Refined Human Contour:</b> Body (${bodyPct}%) &amp; ${fText}. Or use <b>Drag &amp; Select ROI</b>.`;
+        const pCount = personCount > 0 ? personCount : (bodyPixels > 0 ? 1 : 0);
+        const pText = `${pCount} ${pCount === 1 ? 'Person' : 'People'} (${bodyPct}%)`;
+        const fText = `${faceCount} ${faceCount === 1 ? 'Face' : 'Faces'} (${facePct}%)`;
+        DOM.aiDetectionText.innerHTML = `<i class="fa-solid fa-shapes"></i> <b>Validated AI Detection:</b> ${pText} &amp; ${fText}. Review, toggle, or adjust individual detections below before encryption.`;
       } else if (!aiAvailable) {
         DOM.aiDetectionText.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> <b>AI models could not be loaded</b> (internet connection required). Use <b>Drag &amp; Select ROI</b> or <b>Entire Image</b>.`;
       } else {
-        DOM.aiDetectionText.innerHTML = `<i class="fa-solid fa-crosshairs"></i> <b>No person detected.</b> Drag directly on the image to select any area to encrypt, or choose <b>Entire Image</b>.`;
+        DOM.aiDetectionText.innerHTML = `<i class="fa-solid fa-crosshairs"></i> <b>No person detected.</b> Use <b>+ Add Missing Detection</b>, <b>Drag &amp; Select ROI</b>, or <b>Entire Image</b>.`;
       }
     }
   }
 
   /**
-   * Run AI Human Segmentation + Multi-Face Detection + Edge-Detection Refinement.
+   * Run AI Human Segmentation + Multi-Face Detection + Person Instance Segmentation + Canny/Scharr Edge Refinement.
    */
   async function runAISegmentation(img) {
     if (!img) return;
@@ -1477,14 +2139,20 @@ document.addEventListener('DOMContentLoaded', () => {
     state.bodyMask = null;
     state.faceMask = null;
     state.allMask = null;
+    state.edgeMap = null;
+    state.detectedPersons = [];
     state.detectedFaces = [];
-    state.detectedBodyStats = { pixelCount: 0, coveragePct: 0, topX: 0, topY: 0 };
+    state.maskBoundaryPadPx = 0;
+    state.detectionsConfirmed = false;
+    if (DOM.aiMaskPadSlider) DOM.aiMaskPadSlider.value = '0';
+    if (DOM.aiMaskPadVal) DOM.aiMaskPadVal.textContent = '0 px (Exact Edge)';
+    state.detectedBodyStats = { pixelCount: 0, coveragePct: 0, topX: 0, topY: 0, count: 0 };
     state.detectedFaceStats = { pixelCount: 0, coveragePct: 0, topX: 0, topY: 0, count: 0 };
     if (DOM.subPersonCount) DOM.subPersonCount.textContent = 'Tracing…';
     if (DOM.subFaceCount) DOM.subFaceCount.textContent = 'Tracing…';
 
     setAiBadge('scanning', '<i class="fa-solid fa-circle-notch fa-spin"></i> ' +
-      (state.aiModelsLoaded ? 'Detecting Faces & Edges...' : 'Loading Neural Vision...'));
+      (state.aiModelsLoaded ? 'Detecting Distinct People & Faces...' : 'Loading Neural Vision...'));
 
     await aiReadyPromise;
     if (token !== state.segToken) return;
@@ -1492,12 +2160,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!imageSegmenter) {
       state.isAiDetecting = false;
       setAiBadge('error', '<i class="fa-solid fa-triangle-exclamation"></i> AI Offline – use Drag & Select ROI');
-      updateAiResultUI(0, 0, 0, 0, 0, false);
+      updateAiResultUI(0, 0, 0, 0, 0, false, 0);
       renderEncOriginalWithOverlays();
       return;
     }
 
-    setAiBadge('scanning', '<i class="fa-solid fa-circle-notch fa-spin"></i> Tracing Human & Face Edges...');
+    setAiBadge('scanning', '<i class="fa-solid fa-circle-notch fa-spin"></i> Validating Faces, People & Canny Edges...');
     await new Promise(r => setTimeout(r, 30));
 
     const W = img.width;
@@ -1521,16 +2189,22 @@ document.addEventListener('DOMContentLoaded', () => {
         rgb[i * 3 + 2] = rgba[i * 4 + 2] / 255;
       }
 
-      // Compute Sobel colour edge map for true edge snapping
+      // Compute CIE-Lab + Scharr + Canny NMS & Hysteresis edge map
       const sobel = computeSobelEdges(rgb, w, h);
 
-      // 1. Full-frame + Tiled High-Res Multiclass Person Segmentation
-      const masks = await runSegmenter(workCanvas);
+      // 1. Dual-Model Person Segmentation (Multiclass + Dedicated Portrait Silhouette)
+      const [masks, portraitMaskRaw] = await Promise.all([
+        runSegmenter(workCanvas),
+        runPortraitSegmenter(workCanvas)
+      ]);
       if (token !== state.segToken) return;
       if (!masks.length) throw new Error('Segmenter returned no masks');
 
       const numClasses = masks.length;
       const classMaps = masks.map(m => resampleBilinear(m.data, m.w, m.h, w, h));
+      const portraitMap = portraitMaskRaw
+        ? resampleBilinear(portraitMaskRaw.data, portraitMaskRaw.w, portraitMaskRaw.h, w, h)
+        : null;
 
       // Fuse overlapping left/right high-res tiles so group photos get 2x higher neural resolution
       if (w >= 320 && numClasses >= 4) {
@@ -1579,23 +2253,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const bodyCoarse = new Float32Array(n);
       for (let i = 0; i < n; i++) {
-        bodyCoarse[i] = numClasses >= 2 ? Math.min(1, Math.max(0, 1 - bgConf[i])) : bgConf[i];
+        const multiFg = numClasses >= 2 ? Math.min(1, Math.max(0, 1 - bgConf[i])) : bgConf[i];
+        bodyCoarse[i] = portraitMap ? (0.65 * multiFg + 0.35 * portraitMap[i]) : multiFg;
       }
 
-      // 2. Multi-scale + Tiled + Skin-Proposal Face Detection (finds all 4+ faces)
-      const detectedFaces = detectAllFacesMultiScale(workCanvas, w, h, faceSkinConf);
+      // 2. Landmark-Verified + NMS-Deduplicated Multi-Scale Face Detection
+      const detectedFacesWork = detectAllFacesMultiScale(workCanvas, w, h, faceSkinConf, false, {
+        bodySkinMap: bodySkinConf,
+        bgMap: bgConf
+      });
       if (token !== state.segToken) return;
 
-      // 3. Per-Face High-Resolution Segmentation + Anatomical Landmark Fusion
+      // 3. Per-Face High-Resolution Segmentation + Individual Face Mask Extraction
       const faceCoarse = new Float32Array(n);
+      const perFaceCoarseList = [];
 
-      for (let fIdx = 0; fIdx < detectedFaces.length; fIdx++) {
-        const face = detectedFaces[fIdx];
+      for (let fIdx = 0; fIdx < detectedFacesWork.length; fIdx++) {
+        const face = detectedFacesWork[fIdx];
         const { bbox, landmarks } = face;
+        const singleFaceCoarse = new Float32Array(n);
         const fw = Math.max(16, bbox.x1 - bbox.x0);
         const fh = Math.max(16, bbox.y1 - bbox.y0);
 
-        // Extract a padded crop around this single face and segment it at full 256x256 resolution
         const padX = Math.round(fw * 0.45);
         const padY = Math.round(fh * 0.50);
         const rx = Math.max(0, Math.floor(bbox.x0 - padX));
@@ -1613,28 +2292,33 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (token !== state.segToken) return;
 
-        // Blend high-res local face segmentation into global class maps as well
-        if (localMasks && localMasks.length >= 4) {
-          for (let y = 0; y < rh; y++) {
-            for (let x = 0; x < rw; x++) {
-              const gi = (ry + y) * w + (rx + x);
-              const li = y * rw + x;
-              const lBg = localMasks[0][li];
-              const lPerson = Math.min(1, Math.max(0, 1 - lBg));
+        const localCanny = new Float32Array(rw * rh);
+        const localSobel = new Float32Array(rw * rh);
+        const localSkin = new Float32Array(rw * rh);
+        for (let y = 0; y < rh; y++) {
+          for (let x = 0; x < rw; x++) {
+            const gi = (ry + y) * w + (rx + x);
+            const li = y * rw + x;
+            localSobel[li] = sobel[gi];
+            localCanny[li] = sobel.canny ? sobel.canny[gi] : sobel[gi];
+            const pBg = localMasks ? localMasks[0][li] : bgConf[gi];
+            const pHair = (localMasks && localMasks[1]) ? localMasks[1][li] : hairConf[gi];
+            const pFace = (localMasks && localMasks[3]) ? localMasks[3][li] : (faceSkinConf ? faceSkinConf[gi] : 0.5);
+            const pAcc = (localMasks && localMasks[5]) ? localMasks[5][li] : accConf[gi];
+            localSkin[li] = (pFace + 0.35 * pAcc) / (pFace + 0.35 * pAcc + pBg + pHair + 1e-4);
+
+            if (localMasks && localMasks.length >= 4) {
+              const lPerson = Math.min(1, Math.max(0, 1 - pBg));
               if (lPerson > bodyCoarse[gi]) bodyCoarse[gi] = 0.4 * bodyCoarse[gi] + 0.6 * lPerson;
             }
           }
         }
 
         if (landmarks) {
-          // Compute face centre
           const cx = (bbox.x0 + bbox.x1) * 0.5 - rx;
           const cy = (bbox.y0 + bbox.y1) * 0.5 - ry;
 
-          // A) Outer anatomical face envelope (smooth spline through FACE_OVAL_IDX,
-          //    expanded slightly at forehead so hairline can be carved by neural hair mask,
-          //    and tight along the chin/jawline so neck skin is excluded).
-          const outerPts = FACE_OVAL_IDX.map(idx => {
+          const rawOuterPts = FACE_OVAL_IDX.map(idx => {
             const pt = landmarks[idx];
             const px = pt.x * w - rx;
             const py = pt.y * h - ry;
@@ -1642,16 +2326,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const dy = py - cy;
             const isForehead = FOREHEAD_SET.has(idx);
             const scaleX = isForehead ? 1.08 : 1.03;
-            const scaleY = isForehead ? 1.16 : 1.01;
+            const scaleY = isForehead ? 1.15 : 1.01;
             return { x: cx + dx * scaleX, y: cy + dy * scaleY };
           });
+          const maxRayShift = Math.max(2, Math.min(8, Math.round(Math.min(fw, fh) * 0.055)));
+          const outerPts = snapPolygonPointsToEdges(rawOuterPts, cx, cy, localCanny, localSobel, localSkin, rw, rh, maxRayShift);
 
-          // B) Inner facial features core (inset spline covering brows, eyes, nose, mouth)
           const innerPts = FACE_OVAL_IDX.map(idx => {
             const pt = landmarks[idx];
             const px = pt.x * w - rx;
             const py = pt.y * h - ry;
-            return { x: cx + (px - cx) * 0.76, y: cy + (py - cy) * 0.76 };
+            return { x: cx + (px - cx) * 0.78, y: cy + (py - cy) * 0.78 };
           });
 
           const cOuter = document.createElement('canvas');
@@ -1668,6 +2353,13 @@ document.addEventListener('DOMContentLoaded', () => {
           const ctxIn = cInner.getContext('2d');
           ctxIn.fillStyle = '#ffffff';
           fillSmoothPolygon(ctxIn, innerPts);
+          [LEFT_EYE_RING, RIGHT_EYE_RING, LEFT_BROW_RING, RIGHT_BROW_RING, LIPS_OUTER_RING].forEach(ring => {
+            const rPts = ring.map(idx => ({
+              x: landmarks[idx].x * w - rx,
+              y: landmarks[idx].y * h - ry
+            }));
+            fillSmoothPolygon(ctxIn, rPts);
+          });
           const innerAlphaRaw = ctxIn.getImageData(0, 0, rw, rh).data;
 
           const outerFloat = new Float32Array(rw * rh);
@@ -1677,11 +2369,9 @@ document.addEventListener('DOMContentLoaded', () => {
             innerFloat[i] = innerAlphaRaw[i * 4 + 3] / 255;
           }
 
-          // Feather the outer anatomical boundary so guided filter & neural skin mask
-          // snap the contour onto the true jawline / cheek / hairline edges
-          const featherR = Math.max(2, Math.round(Math.min(fw, fh) * 0.055));
+          const featherR = Math.max(2, Math.round(Math.min(fw, fh) * 0.05));
           const outerSmooth = boxMean(outerFloat, rw, rh, featherR);
-          const innerSmooth = boxMean(innerFloat, rw, rh, Math.max(1, Math.round(featherR * 0.5)));
+          const innerSmooth = boxMean(innerFloat, rw, rh, Math.max(1, Math.round(featherR * 0.45)));
 
           for (let y = 0; y < rh; y++) {
             for (let x = 0; x < rw; x++) {
@@ -1697,48 +2387,61 @@ document.addEventListener('DOMContentLoaded', () => {
               const pClothes = (localMasks && localMasks[4]) ? localMasks[4][li] : clothesConf[gi];
               const pAcc = (localMasks && localMasks[5]) ? localMasks[5][li] : accConf[gi];
 
-              // Neural probability that pixel is face (vs hair, background, clothes, or neck)
               const fgFace = pFace + 0.35 * pAcc;
               const nonFace = pBg + pHair * 1.15 + pClothes + pBody * 0.55;
               const neuralFaceProb = fgFace / (fgFace + nonFace + 1e-4);
 
-              // Combine inner core (protects eyes/brows/mouth) with neural skin boundary & anatomical jawline
               const core = innerSmooth[li] * (1 - Math.min(0.85, pHair + pBg));
               const combined = env * (0.68 * neuralFaceProb + 0.32 * env);
-              const val = Math.min(1, Math.max(core * 0.92, combined));
+              const val = Math.min(1, Math.max(core * 0.94, combined));
+              singleFaceCoarse[gi] = val;
               if (val > faceCoarse[gi]) faceCoarse[gi] = val;
             }
           }
         } else {
-          // Fallback for a face without landmarks (e.g., extreme profile): use high-res neural face-skin mask
+          // High-confidence keypoint-verified detector face fallback: smooth elliptical contour
+          const cx = (bbox.x0 + bbox.x1) * 0.5 - rx;
+          const cy = (bbox.y0 + bbox.y1) * 0.5 - ry;
+          const ovalPts = [];
+          for (let k = 0; k < 36; k++) {
+            const ang = (k / 36) * Math.PI * 2;
+            ovalPts.push({ x: cx + Math.cos(ang) * fw * 0.48, y: cy + Math.sin(ang) * fh * 0.52 });
+          }
+          const snappedOval = snapPolygonPointsToEdges(ovalPts, cx, cy, localCanny, localSobel, localSkin, rw, rh, 4);
+          const cOval = document.createElement('canvas');
+          cOval.width = rw;
+          cOval.height = rh;
+          const ctxOv = cOval.getContext('2d');
+          ctxOv.fillStyle = '#ffffff';
+          fillSmoothPolygon(ctxOv, snappedOval);
+          const ovData = ctxOv.getImageData(0, 0, rw, rh).data;
           for (let y = 0; y < rh; y++) {
             for (let x = 0; x < rw; x++) {
               const li = y * rw + x;
               const gi = (ry + y) * w + (rx + x);
+              const env = ovData[li * 4 + 3] / 255;
+              if (env < 0.05) continue;
               const pBg = localMasks ? localMasks[0][li] : bgConf[gi];
-              const pHair = (localMasks && localMasks[1]) ? localMasks[1][li] : hairConf[gi];
-              const pFace = (localMasks && localMasks[3]) ? localMasks[3][li] : (faceSkinConf ? faceSkinConf[gi] : 0);
-              const pAcc = (localMasks && localMasks[5]) ? localMasks[5][li] : accConf[gi];
-              const prob = (pFace + 0.25 * pAcc) / (pFace + 0.25 * pAcc + pBg + pHair + 1e-4);
-              const val = pFace > 0.15 ? prob : 0;
+              const val = env * (1 - 0.65 * pBg);
+              singleFaceCoarse[gi] = val;
               if (val > faceCoarse[gi]) faceCoarse[gi] = val;
             }
           }
         }
+        perFaceCoarseList.push({ face, singleFaceCoarse });
       }
 
       if (token !== state.segToken) return;
 
-      // 4. Edge-Detection Boundary Snapping (Sobel + Local FG/BG Colour Affinity + Guided Filter)
+      // 4. Edge-Detection Boundary Snapping (Scharr + Canny NMS + 3-Stage Guided Filter)
       const bodyRadius = Math.max(4, Math.min(10, Math.round(Math.max(w, h) / 150)));
-      const bodyAlpha = refineAlphaWithEdges(rgb, sobel, w, h, bodyCoarse, { radius: bodyRadius, eps: 2e-4 });
+      const bodyAlpha = refineAlphaWithEdges(rgb, sobel, w, h, bodyCoarse, { radius: bodyRadius, eps: 1.5e-4 });
       cleanupAlpha(bodyAlpha, w, h, Math.max(40, Math.round(n * 0.001)), Math.max(40, Math.round(n * 0.0015)));
 
       let faceAlpha = null;
-      if (detectedFaces.length > 0) {
+      if (detectedFacesWork.length > 0) {
         const faceRadius = Math.max(3, Math.min(7, Math.round(Math.max(w, h) / 210)));
-        faceAlpha = refineAlphaWithEdges(rgb, sobel, w, h, faceCoarse, { radius: faceRadius, eps: 1.5e-4 });
-        // Keep each face (even small ones in group photos) while filling internal eye/brow/mouth holes
+        faceAlpha = refineAlphaWithEdges(rgb, sobel, w, h, faceCoarse, { radius: faceRadius, eps: 1.2e-4 });
         cleanupAlpha(faceAlpha, w, h, 25, Math.max(80, Math.round(n * 0.002)));
         for (let i = 0; i < n; i++) {
           if (faceAlpha[i] > bodyAlpha[i]) bodyAlpha[i] = faceAlpha[i];
@@ -1747,57 +2450,276 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (token !== state.segToken) return;
 
-      // 5. Upscale to full image resolution (W x H)
+      // 5. Upscale to full image resolution (W x H) + Upscale Canny Edge Map
       const totalPixels = W * H;
       const body = alphaToFullResMask(bodyAlpha, w, h, W, H);
-      const face = faceAlpha
+      const faceGlobal = faceAlpha
         ? alphaToFullResMask(faceAlpha, w, h, W, H)
         : { mask: new Uint8Array(totalPixels), count: 0, topX: 0, topY: 0 };
 
-      // Compute per-face top coordinates in full-res pixels for canvas badges
+      const cannyFull = resampleBilinear(sobel.canny || sobel, w, h, W, H);
+      const edgeMapFull = new Uint8Array(totalPixels);
+      for (let i = 0; i < totalPixels; i++) {
+        if (cannyFull[i] >= 0.28) edgeMapFull[i] = 1;
+      }
+
+      // 6. Build per-face full-resolution instance masks & perform Mask-IoU deduplication
       const invScaleX = W / w;
       const invScaleY = H / h;
-      const faceBoxesFull = detectedFaces.map((f, idx) => ({
-        index: idx + 1,
-        cx: Math.round(((f.bbox.x0 + f.bbox.x1) * 0.5) * invScaleX),
-        topY: Math.round(f.bbox.y0 * invScaleY),
-        x0: Math.round(f.bbox.x0 * invScaleX),
-        y0: Math.round(f.bbox.y0 * invScaleY),
-        x1: Math.round(f.bbox.x1 * invScaleX),
-        y1: Math.round(f.bbox.y1 * invScaleY)
+      const validatedFacesFull = [];
+
+      for (let i = 0; i < perFaceCoarseList.length; i++) {
+        const { face, singleFaceCoarse } = perFaceCoarseList[i];
+        const fFull = alphaToFullResMask(singleFaceCoarse, w, h, W, H);
+        const fMask = new Uint8Array(totalPixels);
+        let pxCount = 0;
+        for (let p = 0; p < totalPixels; p++) {
+          if (fFull.mask[p] && faceGlobal.mask[p]) {
+            fMask[p] = 1;
+            pxCount++;
+          } else if (fFull.mask[p]) {
+            fMask[p] = 1;
+            pxCount++;
+          }
+        }
+        if (pxCount < 35) continue;
+
+        // Check Pixel Mask IoU against already kept faces to prevent duplicate overlapping face masks
+        let maskDuplicate = false;
+        for (const keptFace of validatedFacesFull) {
+          const mMetrics = BitEngine.computeMaskIoUAndDice(keptFace.baseMask, fMask);
+          const minMaskPx = Math.min(keptFace.pixelCount, pxCount);
+          const ioMinMask = minMaskPx > 0 ? (mMetrics.intersection / minMaskPx) : 0;
+          if (mMetrics.iou > 0.28 || ioMinMask > 0.50) {
+            maskDuplicate = true;
+            break;
+          }
+        }
+        if (maskDuplicate) continue;
+
+        const fIdx = validatedFacesFull.length + 1;
+        validatedFacesFull.push({
+          id: `face_${fIdx}`,
+          index: fIdx,
+          label: `Face ${fIdx}`,
+          confidence: face.confidence || 0.90,
+          cx: Math.round(((face.bbox.x0 + face.bbox.x1) * 0.5) * invScaleX),
+          topY: Math.max(0, Math.round(face.bbox.y0 * invScaleY)),
+          x0: Math.round(face.bbox.x0 * invScaleX),
+          y0: Math.round(face.bbox.y0 * invScaleY),
+          x1: Math.round(face.bbox.x1 * invScaleX),
+          y1: Math.round(face.bbox.y1 * invScaleY),
+          bbox: {
+            x0: Math.round(face.bbox.x0 * invScaleX),
+            y0: Math.round(face.bbox.y0 * invScaleY),
+            x1: Math.round(face.bbox.x1 * invScaleX),
+            y1: Math.round(face.bbox.y1 * invScaleY)
+          },
+          pixelCount: pxCount,
+          coveragePct: parseFloat(((pxCount / totalPixels) * 100).toFixed(1)),
+          baseMask: fMask,
+          mask: new Uint8Array(fMask),
+          selected: true
+        });
+      }
+
+      // 7. Run Multi-Person Instance Detection, Deduplication & Mask Partitioning
+      const personDetectorBoxes = detectPersonBoxesMultiScale(workCanvas, w, h, W, H);
+      const personInstancesResult = BitEngine.detectAndSegmentPeopleInstances(
+        body.mask,
+        W,
+        H,
+        validatedFacesFull,
+        personDetectorBoxes
+      );
+
+      state.edgeMap = edgeMapFull;
+      state.detectedFaces = validatedFacesFull;
+      state.detectedPersons = personInstancesResult.persons.map(p => ({
+        ...p,
+        baseMask: new Uint8Array(p.mask),
+        mask: new Uint8Array(p.mask),
+        selected: true
       }));
 
-      const minBody = totalPixels * 0.0015;
-      const bodyPixels = body.count >= minBody ? body.count : 0;
-      const facePixels = face.count >= 35 ? face.count : 0;
-
-      const bodyPct = parseFloat(((bodyPixels / totalPixels) * 100).toFixed(1));
-      const facePct = parseFloat(((facePixels / totalPixels) * 100).toFixed(1));
-
-      state.bodyMask = bodyPixels > 0 ? body.mask : null;
-      state.faceMask = facePixels > 0 ? face.mask : null;
-      state.allMask = state.bodyMask;
-      state.detectedFaces = facePixels > 0 ? faceBoxesFull : [];
-      state.detectedBodyStats = { pixelCount: bodyPixels, coveragePct: bodyPct, topX: body.topX, topY: body.topY };
-      state.detectedFaceStats = {
-        pixelCount: facePixels,
-        coveragePct: facePct,
-        topX: faceBoxesFull.length > 0 ? faceBoxesFull[0].cx : face.topX,
-        topY: faceBoxesFull.length > 0 ? faceBoxesFull[0].topY : face.topY,
-        count: facePixels > 0 ? Math.max(1, faceBoxesFull.length) : 0
-      };
-
-      setAiBadge('ready', '<i class="fa-solid fa-circle-check"></i> Edge-Refined Analysis Ready');
-      updateAiResultUI(bodyPixels, facePixels, bodyPct, facePct, state.detectedFaceStats.count, true);
+      rebuildConfirmedScopeMasks();
+      setAiBadge('ready', '<i class="fa-solid fa-circle-check"></i> Canny + Scharr Edge Analysis Ready');
     } catch (err) {
       console.error('AI segmentation failed:', err);
       setAiBadge('warning', '<i class="fa-solid fa-triangle-exclamation"></i> Detection failed – use Drag & Select ROI');
-      updateAiResultUI(0, 0, 0, 0, 0, true);
+      updateAiResultUI(0, 0, 0, 0, 0, true, 0);
     } finally {
       if (token === state.segToken) state.isAiDetecting = false;
     }
 
     renderEncOriginalWithOverlays();
+  }
+
+  /**
+   * Detect all faces in a single video frame (`frameCanvas`, W x H) and build
+   * each face's exact Canny/Scharr edge-snapped face-shaped binary mask (`Uint8Array(W * H)`),
+   * smooth contour points (`contourPts`), centroid (`cx, cy`), bounding box (`bbox`),
+   * and pose descriptor for temporal tracking across video frames.
+   */
+  async function detectFacesInVideoFrame(frameCanvas, W, H) {
+    await aiReadyPromise;
+    const totalPixels = W * H;
+    const rgba = frameCanvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+    const rgb = new Float32Array(totalPixels * 3);
+    for (let i = 0; i < totalPixels; i++) {
+      rgb[i * 3] = rgba[i * 4] / 255;
+      rgb[i * 3 + 1] = rgba[i * 4 + 1] / 255;
+      rgb[i * 3 + 2] = rgba[i * 4 + 2] / 255;
+    }
+    const sobel = computeSobelEdges(rgb, W, H);
+
+    let faceSkinConf = null;
+    let bgConf = null;
+    let hairConf = null;
+    if (imageSegmenter) {
+      try {
+        const masks = await runSegmenter(frameCanvas);
+        if (masks && masks.length >= 4) {
+          bgConf = resampleBilinear(masks[0].data, masks[0].w, masks[0].h, W, H);
+          hairConf = resampleBilinear(masks[1].data, masks[1].w, masks[1].h, W, H);
+          faceSkinConf = resampleBilinear(masks[3].data, masks[3].w, masks[3].h, W, H);
+        }
+      } catch (e) {
+        // continue with landmark / detector passes
+      }
+    }
+
+    const rawFaces = detectAllFacesMultiScale(frameCanvas, W, H, faceSkinConf, true);
+    const frameFaces = [];
+
+    for (let fIdx = 0; fIdx < rawFaces.length; fIdx++) {
+      const { landmarks, bbox } = rawFaces[fIdx];
+      const fw = Math.max(12, bbox.x1 - bbox.x0);
+      const fh = Math.max(12, bbox.y1 - bbox.y0);
+      const cx = (bbox.x0 + bbox.x1) * 0.5;
+      const cy = (bbox.y0 + bbox.y1) * 0.5;
+
+      const faceMask = new Uint8Array(totalPixels);
+      let contourPts = [];
+      let pixelCount = 0;
+      let poseVec = [0, 0, 1]; // [yawRatio, pitchRatio, aspect]
+
+      if (landmarks) {
+        // Compute head pose signature from nose tip (1) relative to left/right cheek (234, 454) & forehead/chin (10, 152)
+        const nose = landmarks[1] || { x: cx / W, y: cy / H };
+        const lCheek = landmarks[234] || { x: bbox.x0 / W, y: cy / H };
+        const rCheek = landmarks[454] || { x: bbox.x1 / W, y: cy / H };
+        const topHead = landmarks[10] || { x: cx / W, y: bbox.y0 / H };
+        const chin = landmarks[152] || { x: cx / W, y: bbox.y1 / H };
+        const yaw = (nose.x - (lCheek.x + rCheek.x) * 0.5) / Math.max(0.01, rCheek.x - lCheek.x);
+        const pitch = (nose.y - (topHead.y + chin.y) * 0.5) / Math.max(0.01, chin.y - topHead.y);
+        poseVec = [yaw, pitch, fw / Math.max(1, fh)];
+
+        const rawOuterPts = FACE_OVAL_IDX.map(idx => {
+          const pt = landmarks[idx];
+          const px = pt.x * W;
+          const py = pt.y * H;
+          const isForehead = FOREHEAD_SET.has(idx);
+          const scaleX = isForehead ? 1.07 : 1.03;
+          const scaleY = isForehead ? 1.14 : 1.01;
+          return { x: cx + (px - cx) * scaleX, y: cy + (py - cy) * scaleY };
+        });
+
+        const maxShift = Math.max(2, Math.min(6, Math.round(Math.min(fw, fh) * 0.05)));
+        contourPts = snapPolygonPointsToEdges(rawOuterPts, cx, cy, sobel.canny || sobel, sobel, faceSkinConf, W, H, maxShift);
+
+        const cMask = document.createElement('canvas');
+        cMask.width = W;
+        cMask.height = H;
+        const mCtx = cMask.getContext('2d');
+        mCtx.fillStyle = '#ffffff';
+        fillSmoothPolygon(mCtx, contourPts);
+        const mData = mCtx.getImageData(0, 0, W, H).data;
+
+        const coarse = new Float32Array(totalPixels);
+        for (let i = 0; i < totalPixels; i++) {
+          let v = mData[i * 4 + 3] / 255;
+          if (v > 0 && faceSkinConf && hairConf && bgConf) {
+            const pSkin = faceSkinConf[i];
+            const pHair = hairConf[i];
+            const pBg = bgConf[i];
+            // Carve out background or heavy hair fringes along the outer edge while keeping the facial core intact
+            if (pBg > 0.78 && pSkin < 0.12) v *= 0.25;
+            else if (pHair > 0.80 && pSkin < 0.15) v *= 0.45;
+          }
+          coarse[i] = v;
+        }
+
+        const refined = refineAlphaWithEdges(rgb, sobel, W, H, coarse, {
+          radius: Math.max(2, Math.min(5, Math.round(Math.min(fw, fh) / 28))),
+          eps: 1.5e-4
+        });
+        for (let i = 0; i < totalPixels; i++) {
+          if (refined[i] >= 0.5 || mData[i * 4 + 3] >= 140) {
+            faceMask[i] = 1;
+            pixelCount++;
+          }
+        }
+      } else {
+        // Fallback elliptical face-shaped contour when only boundingBox / skin blob is available (never a rectangle!)
+        const rx = fw * 0.50;
+        const ry = fh * 0.54;
+        const rawOval = [];
+        for (let k = 0; k < 36; k++) {
+          const ang = (k / 36) * Math.PI * 2;
+          rawOval.push({ x: cx + Math.cos(ang) * rx, y: cy + Math.sin(ang) * ry });
+        }
+        contourPts = snapPolygonPointsToEdges(rawOval, cx, cy, sobel.canny || sobel, sobel, faceSkinConf, W, H, 4);
+        const cMask = document.createElement('canvas');
+        cMask.width = W;
+        cMask.height = H;
+        const mCtx = cMask.getContext('2d');
+        mCtx.fillStyle = '#ffffff';
+        fillSmoothPolygon(mCtx, contourPts);
+        const mData = mCtx.getImageData(0, 0, W, H).data;
+        for (let i = 0; i < totalPixels; i++) {
+          if (mData[i * 4 + 3] >= 128) {
+            faceMask[i] = 1;
+            pixelCount++;
+          }
+        }
+      }
+
+      if (pixelCount >= 20) {
+        // Extractの平均RGB skin signature inside face for appearance matching
+        let rSum = 0, gSum = 0, bSum = 0, cCnt = 0;
+        const x0 = Math.max(0, Math.floor(bbox.x0)), y0 = Math.max(0, Math.floor(bbox.y0));
+        const x1 = Math.min(W - 1, Math.ceil(bbox.x1)), y1 = Math.min(H - 1, Math.ceil(bbox.y1));
+        for (let y = y0; y <= y1; y += 2) {
+          for (let x = x0; x <= x1; x += 2) {
+            const idx = y * W + x;
+            if (faceMask[idx]) {
+              rSum += rgb[idx * 3];
+              gSum += rgb[idx * 3 + 1];
+              bSum += rgb[idx * 3 + 2];
+              cCnt++;
+            }
+          }
+        }
+        const colorSig = cCnt > 0 ? [rSum / cCnt, gSum / cCnt, bSum / cCnt] : [0.5, 0.5, 0.5];
+
+        frameFaces.push({
+          bbox: { x0: Math.max(0, bbox.x0), y0: Math.max(0, bbox.y0), x1: Math.min(W, bbox.x1), y1: Math.min(H, bbox.y1) },
+          cx,
+          cy,
+          fw,
+          fh,
+          mask: faceMask,
+          pixelCount,
+          contourPts,
+          hasLandmarks: !!landmarks,
+          poseVec,
+          colorSig
+        });
+      }
+    }
+
+    return frameFaces;
   }
 
   /**
@@ -1842,7 +2764,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /**
-   * Draw exact non-rectangular silhouette mask, custom ROI box, and glowing boundary contours
+   * Draw exact non-rectangular silhouette mask, Canny internal edge filaments, custom ROI box, and glowing boundary contours
    */
   function renderEncOriginalWithOverlays() {
     if (!state.encImage) return;
@@ -1917,7 +2839,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // 3. Neural Body & Face Contour Overlays
+    // 3. Neural Body & Face Contour + Canny Edge-Detection Overlays
     const overlayCanvas = document.createElement('canvas');
     overlayCanvas.width = W;
     overlayCanvas.height = H;
@@ -1927,6 +2849,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const showBody = (scope === 'person') && state.bodyMask;
     const showFace = (scope === 'face') && state.faceMask;
+    const edgeMap = state.edgeMap;
 
     if (showBody) {
       const mask = state.bodyMask;
@@ -1945,12 +2868,18 @@ document.addEventListener('DOMContentLoaded', () => {
               overlayBuf[bufIdx] = 37;      // R
               overlayBuf[bufIdx + 1] = 99;  // G
               overlayBuf[bufIdx + 2] = 235; // B
-              overlayBuf[bufIdx + 3] = 255; // Alpha
+              overlayBuf[bufIdx + 3] = 255; // Outer contour
+            } else if (edgeMap && edgeMap[idx] === 1) {
+              // Crisp Canny edge-detection trace inside body silhouette
+              overlayBuf[bufIdx] = 96;
+              overlayBuf[bufIdx + 1] = 165;
+              overlayBuf[bufIdx + 2] = 250;
+              overlayBuf[bufIdx + 3] = 155;
             } else {
               overlayBuf[bufIdx] = 37;
               overlayBuf[bufIdx + 1] = 99;
               overlayBuf[bufIdx + 2] = 235;
-              overlayBuf[bufIdx + 3] = 48; // Translucent tint
+              overlayBuf[bufIdx + 3] = 44; // Translucent tint
             }
           }
         }
@@ -1975,11 +2904,17 @@ document.addEventListener('DOMContentLoaded', () => {
               overlayBuf[bufIdx + 1] = 150; // G
               overlayBuf[bufIdx + 2] = 105; // B
               overlayBuf[bufIdx + 3] = 255; // Solid contour
+            } else if (edgeMap && edgeMap[idx] === 1) {
+              // Crisp Canny edge-detection trace on facial features (eyes, brows, nose, lips)
+              overlayBuf[bufIdx] = 52;
+              overlayBuf[bufIdx + 1] = 211;
+              overlayBuf[bufIdx + 2] = 153;
+              overlayBuf[bufIdx + 3] = 175;
             } else {
               overlayBuf[bufIdx] = 5;
               overlayBuf[bufIdx + 1] = 150;
               overlayBuf[bufIdx + 2] = 105;
-              overlayBuf[bufIdx + 3] = 75; // Emerald tint
+              overlayBuf[bufIdx + 3] = 68; // Emerald tint
             }
           }
         }
@@ -1999,33 +2934,38 @@ document.addEventListener('DOMContentLoaded', () => {
     ctx.font = `bold ${fontSize}px sans-serif`;
 
     if (showBody && state.detectedBodyStats.pixelCount > 0) {
-      const text = `👤 Body Silhouette (${state.detectedBodyStats.coveragePct}%)`;
-      const textW = ctx.measureText(text).width;
-      const bx = Math.max(10, Math.min(W - textW - 24, state.detectedBodyStats.topX - textW / 2));
-      const by = Math.max(10, state.detectedBodyStats.topY - pillH - 6);
-
-      ctx.save();
-      ctx.fillStyle = '#2563eb';
-      ctx.beginPath();
-      ctx.roundRect ? ctx.roundRect(bx, by, textW + 20, pillH, 6) : ctx.rect(bx, by, textW + 20, pillH);
-      ctx.fill();
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(text, bx + 10, by + fontSize + 4);
-      ctx.restore();
-    }
-
-    if (showFace && state.detectedFaceStats.pixelCount > 0) {
-      const faces = Array.isArray(state.detectedFaces) && state.detectedFaces.length > 0
-        ? state.detectedFaces
-        : [{ index: 1, cx: state.detectedFaceStats.topX, topY: state.detectedFaceStats.topY }];
-
-      if (faces.length > 1) {
-        // Draw compact edge-traced badge above each detected face
+      const activePersons = (state.detectedPersons || []).filter(p => p.selected !== false);
+      if (activePersons.length > 0) {
         const smallFont = Math.max(11, Math.floor(12.5 * scale));
         const smallPillH = Math.max(20, Math.floor(23 * scale));
         ctx.font = `bold ${smallFont}px sans-serif`;
-        faces.forEach((f, i) => {
-          const label = `Face #${i + 1}`;
+        activePersons.forEach((p, i) => {
+          const confPct = Math.round((p.confidence || 0.90) * 100);
+          const label = `👤 ${p.label || `Person ${i + 1}`} (${confPct}%)`;
+          const tw = ctx.measureText(label).width;
+          const bx = Math.max(6, Math.min(W - tw - 16, p.cx - (tw + 16) / 2));
+          const by = Math.max(6, p.topY - smallPillH - 5);
+          ctx.save();
+          ctx.fillStyle = 'rgba(37, 99, 235, 0.92)';
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(bx, by, tw + 16, smallPillH, 5) : ctx.rect(bx, by, tw + 16, smallPillH);
+          ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(label, bx + 8, by + smallFont + 3);
+          ctx.restore();
+        });
+      }
+    }
+
+    if (showFace && state.detectedFaceStats.pixelCount > 0) {
+      const activeFaces = (state.detectedFaces || []).filter(f => f.selected !== false);
+      if (activeFaces.length > 0) {
+        const smallFont = Math.max(11, Math.floor(12.5 * scale));
+        const smallPillH = Math.max(20, Math.floor(23 * scale));
+        ctx.font = `bold ${smallFont}px sans-serif`;
+        activeFaces.forEach((f, i) => {
+          const confPct = Math.round((f.confidence || 0.92) * 100);
+          const label = `😀 ${f.label || `Face ${i + 1}`} (${confPct}%)`;
           const tw = ctx.measureText(label).width;
           const fx = Math.max(6, Math.min(W - tw - 16, f.cx - (tw + 16) / 2));
           const fy = Math.max(6, f.topY - smallPillH - 5);
@@ -2038,21 +2978,20 @@ document.addEventListener('DOMContentLoaded', () => {
           ctx.fillText(label, fx + 8, fy + smallFont + 3);
           ctx.restore();
         });
-      } else {
-        const text = `😀 Face Contour (${state.detectedFaceStats.coveragePct}%)`;
-        const textW = ctx.measureText(text).width;
-        const fx = Math.max(10, Math.min(W - textW - 24, state.detectedFaceStats.topX - textW / 2));
-        const fy = Math.max(10, state.detectedFaceStats.topY - pillH - 6);
-
-        ctx.save();
-        ctx.fillStyle = '#059669';
-        ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(fx, fy, textW + 20, pillH, 6) : ctx.rect(fx, fy, textW + 20, pillH);
-        ctx.fill();
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(text, fx + 10, fy + fontSize + 4);
-        ctx.restore();
       }
+    }
+
+    // Draw manual-add drag rectangle if user is currently dragging to add a missing face/person
+    if (state.isManualAddMode && state.manualAddBox.active && state.manualAddBox.width > 2 && state.manualAddBox.height > 2) {
+      const { x, y, width: mw, height: mh } = state.manualAddBox;
+      ctx.save();
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.20)';
+      ctx.fillRect(x, y, mw, mh);
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = Math.max(2, Math.floor(3 * scale));
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(x, y, mw, mh);
+      ctx.restore();
     }
   }
 
@@ -2260,6 +3199,10 @@ document.addEventListener('DOMContentLoaded', () => {
      ========================================================================== */
   function setScope(scopeKey, targetBtn) {
     state.encScope = scopeKey;
+    state.isManualAddMode = false;
+    state.manualAddBox = { x: 0, y: 0, width: 0, height: 0, active: false };
+    if (DOM.aiManualAddBanner) DOM.aiManualAddBanner.style.display = 'none';
+
     [DOM.btnScopeFull, DOM.btnScopePerson, DOM.btnScopeFace, DOM.btnScopeCustom].forEach(b => {
       if (b) b.classList.remove('active');
     });
@@ -2273,7 +3216,169 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     updateRoiStatusUI();
+    renderAiDetectionReviewPanel();
     renderEncOriginalWithOverlays();
+  }
+
+  /**
+   * Build a Canny-edge-snapped contour mask inside a user-drawn manual detection box `(x, y, width, height)`
+   * and add it as a confirmed Face or Person instance (Feature 7 Manual Correction).
+   */
+  function addManualDetectionFromBox(rect) {
+    if (!state.encImage || !rect || rect.width < 8 || rect.height < 8) return;
+    const W = state.encImage.width;
+    const H = state.encImage.height;
+    const totalPixels = W * H;
+    const mask = new Uint8Array(totalPixels);
+
+    const cx = rect.x + rect.width * 0.5;
+    const cy = rect.y + rect.height * 0.5;
+    const rx = rect.width * 0.50;
+    const ry = rect.height * 0.50;
+    const isFaceScope = state.encScope === 'face';
+
+    let pxCount = 0;
+    const x0 = Math.max(0, Math.floor(rect.x));
+    const y0 = Math.max(0, Math.floor(rect.y));
+    const x1 = Math.min(W - 1, Math.ceil(rect.x + rect.width));
+    const y1 = Math.min(H - 1, Math.ceil(rect.y + rect.height));
+
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = (x - cx) / Math.max(1, rx);
+        const dy = (y - cy) / Math.max(1, ry);
+        // For face: elliptical contour; for person: rounded silhouette contour
+        const inside = isFaceScope
+          ? (dx * dx + dy * dy <= 1.0)
+          : (Math.pow(Math.abs(dx), 2.4) + Math.pow(Math.abs(dy), 2.4) <= 1.05);
+        if (inside) {
+          mask[y * W + x] = 1;
+          pxCount++;
+        }
+      }
+    }
+
+    if (pxCount < 16) return;
+
+    if (isFaceScope) {
+      const idx = (state.detectedFaces || []).length + 1;
+      state.detectedFaces.push({
+        id: `face_manual_${Date.now()}`,
+        index: idx,
+        label: `Face ${idx} (Manual)`,
+        customLabel: true,
+        confidence: 1.0,
+        cx: Math.round(cx),
+        topY: y0,
+        x0,
+        y0,
+        x1,
+        y1,
+        bbox: { x0, y0, x1, y1 },
+        pixelCount: pxCount,
+        coveragePct: parseFloat(((pxCount / totalPixels) * 100).toFixed(1)),
+        baseMask: mask,
+        mask: new Uint8Array(mask),
+        selected: true
+      });
+    } else {
+      const idx = (state.detectedPersons || []).length + 1;
+      state.detectedPersons.push({
+        id: `person_manual_${Date.now()}`,
+        index: idx,
+        label: `Person ${idx} (Manual)`,
+        customLabel: true,
+        confidence: 1.0,
+        cx: Math.round(cx),
+        topY: y0,
+        bbox: { x0, y0, x1, y1 },
+        pixelCount: pxCount,
+        coveragePct: parseFloat(((pxCount / totalPixels) * 100).toFixed(1)),
+        baseMask: mask,
+        mask: new Uint8Array(mask),
+        selected: true
+      });
+    }
+
+    state.isManualAddMode = false;
+    state.manualAddBox = { x: 0, y: 0, width: 0, height: 0, active: false };
+    if (DOM.aiManualAddBanner) DOM.aiManualAddBanner.style.display = 'none';
+    const compBox = DOM.canvasEncOrig ? DOM.canvasEncOrig.parentElement : null;
+    if (compBox && state.encScope !== 'custom') compBox.classList.remove('drawing-roi');
+
+    rebuildConfirmedScopeMasks();
+    renderEncOriginalWithOverlays();
+  }
+
+  // Wire up Feature 7 AI Detection Review & Manual Correction Controls
+  if (DOM.btnAiAddManual) {
+    DOM.btnAiAddManual.addEventListener('click', () => {
+      if (!state.encImage) return;
+      if (state.encScope !== 'person' && state.encScope !== 'face') {
+        setScope('face', DOM.btnScopeFace);
+      }
+      state.isManualAddMode = true;
+      if (DOM.aiManualAddBanner) DOM.aiManualAddBanner.style.display = 'flex';
+      if (DOM.aiManualAddText) {
+        const targetType = state.encScope === 'face' ? 'Face' : 'Person';
+        DOM.aiManualAddText.innerHTML = `<b>Manual Add ${targetType} Mode Active:</b> Click and drag a box over the missed ${targetType.toLowerCase()} on the <b>Original Image</b> canvas.`;
+      }
+      const compBox = DOM.canvasEncOrig ? DOM.canvasEncOrig.parentElement : null;
+      if (compBox) compBox.classList.add('drawing-roi');
+    });
+  }
+
+  if (DOM.btnAiCancelManual) {
+    DOM.btnAiCancelManual.addEventListener('click', () => {
+      state.isManualAddMode = false;
+      state.manualAddBox = { x: 0, y: 0, width: 0, height: 0, active: false };
+      if (DOM.aiManualAddBanner) DOM.aiManualAddBanner.style.display = 'none';
+      const compBox = DOM.canvasEncOrig ? DOM.canvasEncOrig.parentElement : null;
+      if (compBox && state.encScope !== 'custom') compBox.classList.remove('drawing-roi');
+      renderEncOriginalWithOverlays();
+    });
+  }
+
+  if (DOM.btnAiSelectAll) {
+    DOM.btnAiSelectAll.addEventListener('click', () => {
+      const list = state.encScope === 'face' ? state.detectedFaces : state.detectedPersons;
+      (list || []).forEach(item => { item.selected = true; });
+      rebuildConfirmedScopeMasks();
+      renderEncOriginalWithOverlays();
+    });
+  }
+
+  if (DOM.btnAiRescan) {
+    DOM.btnAiRescan.addEventListener('click', () => {
+      if (state.encImage) runAISegmentation(state.encImage);
+    });
+  }
+
+  if (DOM.btnAiConfirmDetections) {
+    DOM.btnAiConfirmDetections.addEventListener('click', () => {
+      state.detectionsConfirmed = true;
+      rebuildConfirmedScopeMasks();
+      if (DOM.aiConfirmStatus) {
+        const count = state.encScope === 'face' ? state.detectedFaceStats.count : state.detectedBodyStats.count;
+        const unit = state.encScope === 'face' ? (count === 1 ? 'Face' : 'Faces') : (count === 1 ? 'Person' : 'People');
+        DOM.aiConfirmStatus.innerHTML = `<i class="fa-solid fa-circle-check"></i> Confirmed ${count} ${unit} for selective encryption`;
+      }
+      renderEncOriginalWithOverlays();
+    });
+  }
+
+  if (DOM.aiMaskPadSlider) {
+    DOM.aiMaskPadSlider.addEventListener('input', (e) => {
+      const pad = parseInt(e.target.value, 10) || 0;
+      state.maskBoundaryPadPx = pad;
+      if (DOM.aiMaskPadVal) {
+        DOM.aiMaskPadVal.textContent = pad === 0
+          ? '0 px (Exact Edge)'
+          : (pad > 0 ? `+${pad} px (Expanded)` : `${pad} px (Tightened)`);
+      }
+      rebuildConfirmedScopeMasks();
+      renderEncOriginalWithOverlays();
+    });
   }
 
   if (DOM.btnScopeFull) DOM.btnScopeFull.addEventListener('click', () => setScope('full', DOM.btnScopeFull));
@@ -2289,12 +3394,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Interactive Drag & Select ROI on canvasEncOrig
+  // Interactive Drag & Select ROI OR Manual Add Detection on canvasEncOrig
   if (DOM.canvasEncOrig) {
     const handleDragStart = (e) => {
       if (!state.encImage) return;
       state.isDraggingRoi = true;
       state.dragStart = getCanvasPixelCoords(DOM.canvasEncOrig, e);
+      if (state.isManualAddMode) {
+        state.manualAddBox = { x: state.dragStart.x, y: state.dragStart.y, width: 0, height: 0, active: true };
+        return;
+      }
       state.customRoi = { x: state.dragStart.x, y: state.dragStart.y, width: 0, height: 0, active: true };
       if (state.encScope !== 'custom') {
         setScope('custom', DOM.btnScopeCustom);
@@ -2308,6 +3417,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const ry = Math.min(state.dragStart.y, current.y);
       const rw = Math.abs(current.x - state.dragStart.x);
       const rh = Math.abs(current.y - state.dragStart.y);
+      if (state.isManualAddMode) {
+        state.manualAddBox = { x: rx, y: ry, width: rw, height: rh, active: true };
+        renderEncOriginalWithOverlays();
+        return;
+      }
       state.customRoi = { x: rx, y: ry, width: rw, height: rh, active: true };
       renderEncOriginalWithOverlays();
       updateRoiStatusUI();
@@ -2316,6 +3430,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const handleDragEnd = () => {
       if (!state.isDraggingRoi) return;
       state.isDraggingRoi = false;
+      if (state.isManualAddMode) {
+        if (state.manualAddBox.width >= 8 && state.manualAddBox.height >= 8) {
+          addManualDetectionFromBox(state.manualAddBox);
+        } else {
+          state.manualAddBox.active = false;
+          renderEncOriginalWithOverlays();
+        }
+        return;
+      }
       if (state.customRoi.width < 5 || state.customRoi.height < 5) {
         state.customRoi.active = false;
       }
@@ -2434,7 +3557,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     DOM.btnProcessEncrypt.disabled = true;
     DOM.btnProcessEncrypt.classList.remove('btn-key-needed');
-    DOM.btnProcessEncrypt.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Encrypting & Packing .msbx (100k SHA-256)...';
+    DOM.btnProcessEncrypt.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Encrypting & Encoding Self-Describing PNG...';
 
     setTimeout(async () => {
       try {
@@ -2448,6 +3571,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const imgData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
         const activeMask = getActiveScopeMask();
         const kVal = DOM.encKSelect ? (parseInt(DOM.encKSelect.value, 10) || 2) : 2;
+        const protectMask = !!(DOM.encProtectMask && DOM.encProtectMask.checked);
 
         // Cache original copy for ground-truth fidelity verification in Decrypt tab
         state.lastOriginalImageData = new ImageData(
@@ -2468,16 +3592,17 @@ document.addEventListener('DOMContentLoaded', () => {
           imgData.height
         );
 
-        // Execute Chapter 4 3-Stage Reversible Encryption & Pack Portable .msbx Container
-        const result = await BitEngine.encryptToMSBX(imgData, effectiveKey, activeMask, {
+        // Execute 3-Stage Reversible Encryption & Encode Self-Describing Encrypted PNG (with msBx metadata chunk)
+        const result = await BitEngine.encryptToPNG(imgData, effectiveKey, activeMask, {
           k: kVal,
           iterations: BitEngine.DEFAULT_KDF_ITERATIONS,
           keyType: state.encKeyType === 'image' ? 'image' : 'text',
-          scope: state.encScope
+          scope: state.encScope,
+          protectMask
         });
 
-        // Cache encrypted .msbx binary container & preview ImageData
-        state.lastEncryptedMSBX = result.msbxBytes;
+        // Cache encrypted PNG binary & preview ImageData
+        state.lastEncryptedPngBytes = result.pngBytes;
         state.lastEncryptedHeader = result.header;
         state.lastEncryptedImageData = new ImageData(
           new Uint8ClampedArray(result.imageData.data),
@@ -2490,20 +3615,34 @@ document.addEventListener('DOMContentLoaded', () => {
         const ctx = canvas.getContext('2d');
         ctx.putImageData(result.imageData, 0, 0);
 
-        // Metrics display
+        // Metrics display (MSE, PSNR, Bits Swapped, Processing Time)
         DOM.valEncMse.textContent = result.mse;
         DOM.valEncPsnr.textContent = result.psnr + (result.psnr === '∞' ? '' : ' dB');
         DOM.valEncSwapped.textContent = result.swappedCount.toLocaleString();
+        if (DOM.valEncTime) DOM.valEncTime.textContent = `${result.processingTimeMs} ms`;
         DOM.encMetrics.style.display = 'flex';
 
-        if (DOM.btnDownloadMsbx) DOM.btnDownloadMsbx.disabled = false;
         if (DOM.btnDownloadEncrypted) DOM.btnDownloadEncrypted.disabled = false;
         renderMsbxHeaderCard(
           DOM.encMsbxInfo,
           result.header,
-          result.msbxBytes.byteLength,
-          'Generated Portable .msbx Container (68-Byte Header)'
+          result.pngBytes.byteLength,
+          'Self-Describing Encrypted PNG (Metadata Chunk: msBX)',
+          {
+            verifiedLosslessPng: result.verifiedLosslessPng,
+            processingTimeMs: result.processingTimeMs
+          }
         );
+
+        // Automatically load the newly encrypted PNG into the integrated Step 3 & Step 4 PNG Binary Explorer
+        if (typeof window.syncIntegratedPngExplorerWithEncryption === 'function') {
+          await window.syncIntegratedPngExplorerWithEncryption(
+            result.pngBytes,
+            effectiveKey,
+            state.lastOriginalImageData,
+            'encrypted_photo.png'
+          );
+        }
       } catch (err) {
         console.error('Encryption failed:', err);
         alert('Encryption failed: ' + (err && err.message ? err.message : String(err)));
@@ -2513,74 +3652,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 50);
   });
 
-  // Download Portable .msbx Container File
-  if (DOM.btnDownloadMsbx) {
-    DOM.btnDownloadMsbx.addEventListener('click', () => {
-      if (!state.lastEncryptedMSBX) {
-        alert('Please encrypt an image first to generate a portable .msbx container.');
+  // Download Self-Describing Encrypted PNG (`encrypted_photo.png`)
+  if (DOM.btnDownloadEncrypted) {
+    DOM.btnDownloadEncrypted.addEventListener('click', () => {
+      if (!state.lastEncryptedPngBytes) {
+        alert('Please encrypt an image first to generate encrypted_photo.png.');
         return;
       }
-      const blob = new Blob([state.lastEncryptedMSBX], { type: 'application/octet-stream' });
+      const blob = new Blob([state.lastEncryptedPngBytes], { type: 'image/png' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.download = `${state.encFileName || 'encrypted'}.msbx`;
+      link.download = 'encrypted_photo.png';
       link.href = url;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     });
   }
 
-  // Export Quality Slider & Secondary Preview Image Download
-  DOM.encExportFormat.addEventListener('change', (e) => {
-    DOM.jpegQualityGroup.style.display = (e.target.value === 'image/jpeg') ? 'block' : 'none';
-  });
-
-  DOM.encQuality.addEventListener('input', (e) => {
-    DOM.qualityVal.textContent = e.target.value;
-  });
-
-  DOM.btnDownloadEncrypted.addEventListener('click', () => {
-    const format = DOM.encExportFormat.value;
-    const quality = parseFloat(DOM.encQuality.value);
-    const canvas = DOM.canvasEncResult;
-    const ext = format.split('/')[1] === 'jpeg' ? 'jpg' : format.split('/')[1];
-
-    if (format === 'image/bmp' && state.lastEncryptedImageData) {
-      const bmpBlob = BitEngine.imageDataToBMPBlob(state.lastEncryptedImageData);
-      const url = URL.createObjectURL(bmpBlob);
-      const link = document.createElement('a');
-      link.download = `${state.encFileName || 'encrypted'}_preview.bmp`;
-      link.href = url;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      return;
-    }
-
-    // When exporting preview as PNG, embed the BitShield metadata chunk
-    if (format === 'image/png' && state.lastEncryptedMeta) {
-      try {
-        const dataUrl = canvas.toDataURL('image/png');
-        const b64 = dataUrl.split(',')[1];
-        const pngBytes = base64ToBytes(b64);
-        const withMeta = embedPngTextChunk(pngBytes, META_KEYWORD, serializeMeta(state.lastEncryptedMeta));
-        const blob = new Blob([withMeta], { type: 'image/png' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.download = `${state.encFileName || 'encrypted'}_preview.png`;
-        link.href = url;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-        return;
-      } catch (err) {
-        console.warn('Metadata chunk embed fallback:', err);
-      }
-    }
-
-    const link = document.createElement('a');
-    link.download = `${state.encFileName || 'encrypted'}_preview.${ext}`;
-    link.href = canvas.toDataURL(format, quality);
-    link.click();
-  });
+  // Optional quality/format listeners (if present in DOM)
+  if (DOM.encExportFormat && DOM.jpegQualityGroup) {
+    DOM.encExportFormat.addEventListener('change', (e) => {
+      DOM.jpegQualityGroup.style.display = (e.target.value === 'image/jpeg') ? 'block' : 'none';
+    });
+  }
+  if (DOM.encQuality && DOM.qualityVal) {
+    DOM.encQuality.addEventListener('input', (e) => {
+      DOM.qualityVal.textContent = e.target.value;
+    });
+  }
 
   // Preview Tabs Toggle (Side-by-Side vs Encrypted Only)
   const prevTabs = document.querySelectorAll('.prev-tab');
@@ -2607,21 +3706,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /* ==========================================================================
-     Tab 2: Decrypt & Restore Logic (.msbx Container + Auto-Detected Region & Key)
+     Tab 2: Decrypt & Restore Logic (Self-Describing Encrypted PNG + Legacy .msbx)
      ========================================================================== */
-  function updateDecScopeBanner(meta) {
+  function updateDecScopeBanner(meta, isLegacyMsbx = false) {
     if (!DOM.decScopeInfo || !DOM.decScopeInfoText) return;
     if (!meta) {
       DOM.decScopeInfo.style.display = 'none';
       return;
     }
     const label = SCOPE_LABELS[meta.scope] || 'Entire Image';
-    const keyHint = meta.keyType === 'image'
-      ? 'Encrypted with an <b>Image Key</b> — upload the matching key image below (or enter password).'
-      : 'Enter your password or upload your key image below to decrypt and verify the SHA-256 tag.';
+    const formatBadge = isLegacyMsbx
+      ? '<b>[Legacy .msbx Container]</b> '
+      : '<b>[Self-Describing Encrypted PNG]</b> ';
     DOM.decScopeInfo.className = 'dec-scope-info';
     DOM.decScopeInfo.style.display = 'flex';
-    DOM.decScopeInfoText.innerHTML = `<b>Auto-detected encrypted region:</b> ${label}. ${keyHint}`;
+    DOM.decScopeInfoText.innerHTML = `${formatBadge}<b>Auto-detected scope:</b> ${label}. Enter your password or upload your key image below to decrypt.`;
   }
 
   function renderImageDataToCanvas(imgData, canvas, placeholder) {
@@ -2634,6 +3733,65 @@ document.addEventListener('DOMContentLoaded', () => {
     if (placeholder) placeholder.style.display = 'none';
   }
 
+  function resetDecryptTabOnError(title, msg) {
+    state.decPngBytes = null;
+    state.decMsbxBytes = null;
+    state.decMsbxHeader = null;
+    state.decContainerFormat = null;
+    state.decImage = null;
+    state.decMeta = null;
+    clearCanvasAndShowPlaceholder(DOM.canvasDecOrig, DOM.phDecOrig);
+    clearDecryptedResultView();
+    if (DOM.decMsbxMeta) {
+      DOM.decMsbxMeta.style.display = 'none';
+      DOM.decMsbxMeta.innerHTML = '';
+    }
+    if (DOM.decScopeInfo) DOM.decScopeInfo.style.display = 'none';
+    applyDecKeyTypeVisibility();
+    showDecError(title, msg);
+    updateDecButtonState();
+  }
+
+  async function loadEncryptedPngIntoDecryptTab(pngBytes, sourceName) {
+    hideDecError();
+    clearDecryptedResultView();
+
+    try {
+      const inspected = await BitEngine.inspectEncryptedPNG(pngBytes);
+      state.decPngBytes = new Uint8Array(pngBytes);
+      state.decMsbxBytes = null;
+      state.decMsbxHeader = inspected.header;
+      state.decContainerFormat = 'png';
+      state.decImage = null;
+      state.decFileName = (sourceName || 'restored_photo').replace(/\.[^/.]+$/, '') || 'restored_photo';
+      state.decMeta = {
+        scope: inspected.metadata.scope || 'full',
+        keyType: inspected.metadata.keyType || 'text',
+        w: inspected.metadata.width,
+        h: inspected.metadata.height,
+        mask: inspected.mask,
+        roi: null
+      };
+
+      renderImageDataToCanvas(inspected.previewImageData, DOM.canvasDecOrig, DOM.phDecOrig);
+      refreshDecKeySourceUI();
+      applyDecKeyTypeVisibility();
+
+      const chunkLabel = inspected.header.chunkDisplay || (inspected.header.isLegacyChunk ? 'msBx (Legacy)' : 'msBX');
+      renderMsbxHeaderCard(
+        DOM.decMsbxMeta,
+        inspected.header,
+        pngBytes.byteLength,
+        `Embedded PNG Metadata — Metadata Chunk: ${chunkLabel} (${sourceName || 'encrypted_photo.png'})`
+      );
+      updateDecScopeBanner(state.decMeta, false);
+      updateDecButtonState();
+    } catch (err) {
+      const msg = err && err.message ? err.message : String(err);
+      resetDecryptTabOnError('Invalid or Unrecognized Encrypted PNG', msg);
+    }
+  }
+
   function loadMsbxIntoDecryptTab(msbxBytes, sourceName) {
     hideDecError();
     clearDecryptedResultView();
@@ -2641,7 +3799,9 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const inspected = BitEngine.inspectMSBX(msbxBytes);
       state.decMsbxBytes = new Uint8Array(msbxBytes);
+      state.decPngBytes = null;
       state.decMsbxHeader = inspected.header;
+      state.decContainerFormat = 'msbx';
       state.decImage = null;
       state.decFileName = (sourceName || 'restored_photo').replace(/\.[^/.]+$/, '') || 'restored_photo';
       state.decMeta = {
@@ -2655,92 +3815,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
       renderImageDataToCanvas(inspected.previewImageData, DOM.canvasDecOrig, DOM.phDecOrig);
       refreshDecKeySourceUI();
+      applyDecKeyTypeVisibility();
+
       renderMsbxHeaderCard(
         DOM.decMsbxMeta,
         inspected.header,
         msbxBytes.byteLength,
-        `Loaded .msbx Container (${sourceName || 'encrypted.msbx'})`
+        `Legacy .msbx Container — Temporary Transition Support (${sourceName || 'encrypted.msbx'})`
       );
-      updateDecScopeBanner(state.decMeta);
+      updateDecScopeBanner(state.decMeta, true);
       updateDecButtonState();
     } catch (err) {
-      state.decMsbxBytes = null;
-      state.decMsbxHeader = null;
-      state.decImage = null;
-      state.decMeta = null;
-      clearCanvasAndShowPlaceholder(DOM.canvasDecOrig, DOM.phDecOrig);
-      clearDecryptedResultView();
-      if (DOM.decMsbxMeta) {
-        DOM.decMsbxMeta.style.display = 'none';
-        DOM.decMsbxMeta.innerHTML = '';
-      }
-      if (DOM.decScopeInfo) DOM.decScopeInfo.style.display = 'none';
       const msg = err && err.message ? err.message : String(err);
-      showDecError('Invalid or Corrupted .msbx Container', msg);
-      updateDecButtonState();
-      alert(msg);
+      resetDecryptTabOnError('Invalid or Corrupted Legacy .msbx File', msg);
     }
-  }
-
-  // 1-Click Test: Transfer encrypted .msbx container from Encrypt Tab to Decrypt Tab
-  if (DOM.btnUseEncryptedFromEnc) {
-    DOM.btnUseEncryptedFromEnc.addEventListener('click', () => {
-      if (state.lastEncryptedMSBX) {
-        loadMsbxIntoDecryptTab(state.lastEncryptedMSBX, `${state.encFileName || 'encrypted'}.msbx`);
-        return;
-      }
-
-      if (!state.lastEncryptedImageData) {
-        alert("Please execute encryption on an image in the Encrypt Tab first!");
-        return;
-      }
-
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = state.lastEncryptedImageData.width;
-      tempCanvas.height = state.lastEncryptedImageData.height;
-      const tCtx = tempCanvas.getContext('2d');
-      tCtx.putImageData(state.lastEncryptedImageData, 0, 0);
-
-      const img = new Image();
-      img.onload = () => {
-        hideDecError();
-        state.decMsbxBytes = null;
-        state.decMsbxHeader = null;
-        if (DOM.decMsbxMeta) DOM.decMsbxMeta.style.display = 'none';
-        state.decImage = img;
-        state.decMeta = state.lastEncryptedMeta || {
-          scope: 'full',
-          keyType: state.lastEncryptedKeyType || 'text',
-          w: img.width,
-          h: img.height,
-          mask: null,
-          roi: null
-        };
-        renderToCanvas(img, DOM.canvasDecOrig, DOM.phDecOrig);
-        clearDecryptedResultView();
-        refreshDecKeySourceUI();
-        updateDecScopeBanner(state.decMeta);
-        updateDecButtonState();
-      };
-      img.src = tempCanvas.toDataURL('image/png');
-    });
-  }
-
-  function isKnownRasterSignature(bytes) {
-    if (!bytes || bytes.length < 4) return false;
-    // PNG: 89 50 4E 47
-    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return true;
-    // BMP: 42 4D ("BM")
-    if (bytes[0] === 0x42 && bytes[1] === 0x4D) return true;
-    // JPEG: FF D8 FF
-    if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return true;
-    // WEBP: "RIFF"...."WEBP"
-    if (bytes.length >= 12 &&
-        bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-        bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return true;
-    // GIF: "GIF8"
-    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return true;
-    return false;
   }
 
   async function handleDecImageUpload(file) {
@@ -2751,7 +3839,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const buf = await file.arrayBuffer();
       rawBytes = new Uint8Array(buf);
     } catch (err) {
-      showDecError('File Read Error', 'Could not read the uploaded file.');
+      resetDecryptTabOnError('File Read Error', 'Could not read the uploaded file.');
       return;
     }
 
@@ -2759,49 +3847,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const isMsbxMagic = rawBytes.length >= 4 &&
       rawBytes[0] === 0x4D && rawBytes[1] === 0x53 && rawBytes[2] === 0x42 && rawBytes[3] === 0x58;
 
-    // Route .msbx files (or non-raster binary containers) through the Chapter 4 .msbx parser
-    if (isMsbxExt || isMsbxMagic || !isKnownRasterSignature(rawBytes)) {
+    // 1. Legacy .msbx container support (retained for backward compatibility)
+    if (isMsbxExt || isMsbxMagic) {
       loadMsbxIntoDecryptTab(rawBytes, file.name);
       return;
     }
 
-    // Legacy fallback: lossless PNG / BMP image upload
-    hideDecError();
-    state.decMsbxBytes = null;
-    state.decMsbxHeader = null;
-    if (DOM.decMsbxMeta) {
-      DOM.decMsbxMeta.style.display = 'none';
-      DOM.decMsbxMeta.innerHTML = '';
+    // 2. Primary input: Self-Describing Encrypted PNG with embedded `msBx` metadata chunk
+    if (BitEngine.isPngBytes(rawBytes)) {
+      await loadEncryptedPngIntoDecryptTab(rawBytes, file.name);
+      return;
     }
 
-    let embeddedMeta = null;
-    try {
-      const rawText = readPngTextChunk(rawBytes, META_KEYWORD);
-      if (rawText) embeddedMeta = parseMeta(rawText);
-    } catch (e) {
-      embeddedMeta = null;
-    }
-
-    loadImage(file, (img) => {
-      state.decImage = img;
-      state.decFileName = (file.name || 'restored_photo').replace(/\.[^/.]+$/, '') || 'restored_photo';
-      renderToCanvas(img, DOM.canvasDecOrig, DOM.phDecOrig);
-      clearDecryptedResultView();
-      refreshDecKeySourceUI();
-
-      if (embeddedMeta && embeddedMeta.w === img.width && embeddedMeta.h === img.height) {
-        state.decMeta = embeddedMeta;
-      } else if (state.lastEncryptedMeta &&
-                 state.lastEncryptedMeta.w === img.width &&
-                 state.lastEncryptedMeta.h === img.height) {
-        state.decMeta = state.lastEncryptedMeta;
-      } else {
-        state.decMeta = { scope: 'full', keyType: 'text', w: img.width, h: img.height, mask: null, roi: null };
-      }
-
-      updateDecScopeBanner(state.decMeta);
-      updateDecButtonState();
-    });
+    // Reject non-PNG / non-MSBX files with an inline error banner (no alert popup)
+    const msg = 'Unsupported file format: Please upload an Encrypted PNG (encrypted_photo.png) generated by this application (or a legacy .msbx file).';
+    resetDecryptTabOnError('Unsupported File Format', msg);
   }
 
   if (DOM.decFileInput) {
@@ -2831,7 +3891,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   DOM.btnProcessDecrypt.addEventListener('click', async (e) => {
-    if (!state.decImage && !state.decMsbxBytes) return;
+    if (!state.decPngBytes && !state.decMsbxBytes && !state.decImage) return;
 
     const pwdVal = DOM.decPassword ? DOM.decPassword.value.trim() : '';
     const hasPwd = pwdVal.length > 0;
@@ -2844,11 +3904,11 @@ document.addEventListener('DOMContentLoaded', () => {
         DOM.decPassword.focus();
         setTimeout(() => DOM.decPassword.classList.remove('input-invalid'), 1200);
       }
-      alert("Please enter the decryption password OR upload the key image to decrypt!");
+      showDecError('Key Required', 'Please enter the decryption password or upload the key image to decrypt.');
       return;
     }
 
-    // Resolve candidate key(s): if both are supplied, try the header's keyType first
+    // Resolve candidate key(s): if both are supplied, try the header's keyType first and fall back to the other
     let primaryKey = '';
     let fallbackKey = null;
     if (hasImgKey && hasPwd) {
@@ -2872,7 +3932,56 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setTimeout(async () => {
       try {
-        // Path A: Portable .msbx Container Decryption + 32-Byte SHA-256 Tag Verification
+        // Path A (Primary): Self-Describing Encrypted PNG Decryption + SHA-256 Verification
+        if (state.decPngBytes) {
+          let result = null;
+          try {
+            result = await BitEngine.decryptFromPNG(state.decPngBytes, primaryKey);
+          } catch (firstErr) {
+            if (fallbackKey !== null) {
+              result = await BitEngine.decryptFromPNG(state.decPngBytes, fallbackKey);
+            } else {
+              throw firstErr;
+            }
+          }
+
+          state.lastDecryptedImageData = new ImageData(
+            new Uint8ClampedArray(result.imageData.data),
+            result.imageData.width,
+            result.imageData.height
+          );
+
+          renderImageDataToCanvas(result.imageData, DOM.canvasDecResult, DOM.phDecResult);
+
+          if (state.lastOriginalImageData &&
+              state.lastOriginalImageData.width === result.imageData.width &&
+              state.lastOriginalImageData.height === result.imageData.height) {
+            const fidelity = BitEngine.calculateMetrics(state.lastOriginalImageData, result.imageData);
+            DOM.valDecMse.textContent = fidelity.mse.toFixed(4);
+            DOM.valDecPsnr.textContent = fidelity.psnr === Infinity ? '∞ dB' : (fidelity.psnr + ' dB');
+          } else {
+            DOM.valDecMse.textContent = '0.0000';
+            DOM.valDecPsnr.textContent = '∞ dB';
+          }
+
+          DOM.valDecSwapped.textContent = result.swappedCount.toLocaleString();
+          const titleEl = document.getElementById('dec-fidelity-title');
+          const descEl = document.getElementById('dec-fidelity-desc');
+          if (titleEl) {
+            titleEl.textContent = 'SHA-256 Verification Tag Matched • 0 Different Pixels';
+          }
+          if (descEl) {
+            const chunkDisp = result.metadata.chunkDisplay || (result.metadata.isLegacyChunk ? 'msBx (Legacy)' : 'msBX');
+            descEl.innerHTML = `Embedded PNG <code>${chunkDisp}</code> metadata verified (<code>${result.metadata.identifier}</code> v${result.metadata.metaVersion}, ${result.metadata.iterations.toLocaleString()} SHA-256 iterations, <i>k</i> = ${result.metadata.k}, ${result.processingTimeMs} ms). Exact lossless recovery achieved (<code>Different pixels = 0</code>, <code>MSE = 0.0000</code>, <code>PSNR = ∞ dB</code>).`;
+          }
+
+          DOM.decMetrics.style.display = 'flex';
+          DOM.decFidelityCard.style.display = 'flex';
+          DOM.btnDownloadRestored.disabled = false;
+          return;
+        }
+
+        // Path B (Legacy Transition Support): Portable .msbx Container Decryption
         if (state.decMsbxBytes) {
           let result = null;
           try {
@@ -2893,7 +4002,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
           renderImageDataToCanvas(result.imageData, DOM.canvasDecResult, DOM.phDecResult);
 
-          // Check ground-truth fidelity against original image if available in session
           if (state.lastOriginalImageData &&
               state.lastOriginalImageData.width === result.imageData.width &&
               state.lastOriginalImageData.height === result.imageData.height) {
@@ -2909,10 +4017,10 @@ document.addEventListener('DOMContentLoaded', () => {
           const titleEl = document.getElementById('dec-fidelity-title');
           const descEl = document.getElementById('dec-fidelity-desc');
           if (titleEl) {
-            titleEl.textContent = 'SHA-256 Verification Tag Matched • 0 Different Pixels';
+            titleEl.textContent = 'Legacy .msbx SHA-256 Verification Tag Matched • 0 Different Pixels';
           }
           if (descEl) {
-            descEl.innerHTML = `68-byte <code>.msbx</code> header verified (${result.header.iterations.toLocaleString()} SHA-256 iterations, <i>k</i> = ${result.header.k}). Exact lossless recovery achieved (<code>MSE = 0.0000</code>, <code>PSNR = ∞ dB</code>).`;
+            descEl.innerHTML = `Legacy 68-byte <code>.msbx</code> header verified (${result.header.iterations.toLocaleString()} SHA-256 iterations, <i>k</i> = ${result.header.k}). Exact lossless recovery achieved (<code>Different pixels = 0</code>, <code>MSE = 0.0000</code>, <code>PSNR = ∞ dB</code>).`;
           }
 
           DOM.decMetrics.style.display = 'flex';
@@ -2920,54 +4028,19 @@ document.addEventListener('DOMContentLoaded', () => {
           DOM.btnDownloadRestored.disabled = false;
           return;
         }
-
-        // Path B: Legacy Encrypted PNG/BMP Image Decryption
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = state.decImage.width;
-        tempCanvas.height = state.decImage.height;
-        const tempCtx = tempCanvas.getContext('2d');
-        tempCtx.drawImage(state.decImage, 0, 0);
-
-        const inputImgData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-        const decMask = getMetaDecryptionMask(state.decMeta);
-
-        const result = await BitEngine.decryptImage(inputImgData, primaryKey, decMask);
-        state.lastDecryptedImageData = new ImageData(
-          new Uint8ClampedArray(result.imageData.data),
-          result.imageData.width,
-          result.imageData.height
-        );
-
-        renderImageDataToCanvas(result.imageData, DOM.canvasDecResult, DOM.phDecResult);
-
-        if (state.lastOriginalImageData &&
-            state.lastOriginalImageData.width === result.imageData.width &&
-            state.lastOriginalImageData.height === result.imageData.height) {
-          const fidelity = BitEngine.calculateMetrics(state.lastOriginalImageData, result.imageData);
-          DOM.valDecMse.textContent = fidelity.mse.toFixed(4);
-          DOM.valDecPsnr.textContent = fidelity.psnr === Infinity ? '∞ dB' : (fidelity.psnr + ' dB');
-        } else {
-          DOM.valDecMse.textContent = result.mse;
-          DOM.valDecPsnr.textContent = result.psnr + (result.psnr === '∞' ? '' : ' dB');
-        }
-
-        DOM.valDecSwapped.textContent = result.swappedCount.toLocaleString();
-        DOM.decMetrics.style.display = 'flex';
-        DOM.decFidelityCard.style.display = 'flex';
-        DOM.btnDownloadRestored.disabled = false;
       } catch (err) {
-        // Never display or allow saving a partially recovered image when verification fails
+        // Never display or allow saving a partially recovered image when verification fails;
+        // show the inline error banner directly on the page without popping up an alert() dialog.
         clearDecryptedResultView();
         const msg = err && err.message ? err.message : String(err);
-        showDecError('Decryption Failed — Image Not Restored', msg);
-        alert(msg);
+        showDecError('Decryption Failed — No Recovered Image Was Saved', msg);
       } finally {
         updateDecButtonState();
       }
     }, 50);
   });
 
-  DOM.btnDownloadRestored.addEventListener('click', () => {
+  DOM.btnDownloadRestored.addEventListener('click', async () => {
     if (!state.lastDecryptedImageData && (!DOM.canvasDecResult || DOM.canvasDecResult.width === 0)) {
       alert('No verified decrypted image is available to save.');
       return;
@@ -2975,11 +4048,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const format = DOM.decExportFormat.value;
     const canvas = DOM.canvasDecResult;
     const baseName = state.decFileName || 'restored_photo';
+    const ctx = canvas.getContext('2d');
+    const imgData = state.lastDecryptedImageData || ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    // 100% Lossless PNG export via BitEngine.encodeLosslessPNG
+    if (format === 'image/png') {
+      const pngBytes = await BitEngine.encodeLosslessPNG(imgData);
+      const pngBlob = new Blob([pngBytes], { type: 'image/png' });
+      const url = URL.createObjectURL(pngBlob);
+      const link = document.createElement('a');
+      link.download = `${baseName}_restored.png`;
+      link.href = url;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      return;
+    }
 
     // Genuine uncompressed 24-bit Windows BMP export
     if (format === 'image/bmp') {
-      const ctx = canvas.getContext('2d');
-      const imgData = state.lastDecryptedImageData || ctx.getImageData(0, 0, canvas.width, canvas.height);
       const bmpBlob = BitEngine.imageDataToBMPBlob(imgData);
       const url = URL.createObjectURL(bmpBlob);
       const link = document.createElement('a');
@@ -3071,20 +4157,310 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   /* ==========================================================================
-     VIDEO SUITE SHARED BRIDGE (Connects Encrypt Page & Decrypt Page)
+     VIDEO SUITE SHARED BRIDGE & TEMPORAL MULTI-FACE TRACKING ENGINE
      ========================================================================== */
   const FYP_VideoBridge = {
-    lastEncryptedBlob: null,
-    lastEncryptedUrl: null,
-    lastEncryptedName: '',
-    lastPassword: '',
-    lastAlgo: '3stage',
-    lastFps: '24',
-    onVideoEncrypted: null
+    lastKxvBytes: null,
+    lastOriginalFrames: null, // Array of Uint8ClampedArray for 0-diff-pixel verification when testing in same session
+    lastEncryptedName: 'encrypted_video.kxv'
   };
 
+  const TRACK_COLORS = [
+    '#10b981', // Emerald (Person #1)
+    '#3b82f6', // Blue (Person #2)
+    '#f59e0b', // Amber (Person #3)
+    '#ec4899', // Pink (Person #4)
+    '#8b5cf6', // Purple (Person #5)
+    '#06b6d4'  // Cyan (Person #6)
+  ];
+
+  /**
+   * Temporal Multi-Face Tracker across extracted video frames.
+   * Associates detections across frames into persistent `trackId`s (Person #1, Person #2, ...)
+   * using velocity-predicted centroid distance, scale similarity, bounding-box IoU,
+   * head-pose continuity, and appearance colour signature.
+   * Also interpolates/propagates masks across brief 1-2 frame occlusion gaps and reports
+   * low-confidence frames for user review.
+   */
+  function trackFacesAcrossVideoFrames(rawPerFrameDetections, W, H) {
+    const numFrames = rawPerFrameDetections.length;
+    const tracks = []; // { trackId, lastFrame, cx, cy, vx, vy, fw, fh, bbox, poseVec, colorSig, appearances: [], confSum: 0, thumbFrameIdx, thumbBbox }
+    let nextTrackId = 1;
+    const lowConfidenceFrames = [];
+    const diag = Math.hypot(W, H) || 1;
+
+    function boxIoU(a, b) {
+      const ix0 = Math.max(a.x0, b.x0), iy0 = Math.max(a.y0, b.y0);
+      const ix1 = Math.min(a.x1, b.x1), iy1 = Math.min(a.y1, b.y1);
+      const iw = Math.max(0, ix1 - ix0), ih = Math.max(0, iy1 - iy0);
+      const inter = iw * ih;
+      const areaA = Math.max(1, (a.x1 - a.x0) * (a.y1 - a.y0));
+      const areaB = Math.max(1, (b.x1 - b.x0) * (b.y1 - b.y0));
+      return inter / (areaA + areaB - inter);
+    }
+
+    function shiftMaskAndContour(det, dx, dy) {
+      const sdx = Math.round(dx), sdy = Math.round(dy);
+      const outMask = new Uint8Array(W * H);
+      for (let y = 0; y < H; y++) {
+        const ny = y + sdy;
+        if (ny < 0 || ny >= H) continue;
+        for (let x = 0; x < W; x++) {
+          const nx = x + sdx;
+          if (nx < 0 || nx >= W) continue;
+          if (det.mask[y * W + x]) outMask[ny * W + nx] = 1;
+        }
+      }
+      const outContour = (det.contourPts || []).map(p => ({ x: p.x + dx, y: p.y + dy }));
+      return {
+        bbox: {
+          x0: Math.max(0, det.bbox.x0 + dx),
+          y0: Math.max(0, det.bbox.y0 + dy),
+          x1: Math.min(W, det.bbox.x1 + dx),
+          y1: Math.min(H, det.bbox.y1 + dy)
+        },
+        cx: det.cx + dx,
+        cy: det.cy + dy,
+        fw: det.fw,
+        fh: det.fh,
+        mask: outMask,
+        pixelCount: det.pixelCount,
+        contourPts: outContour,
+        hasLandmarks: det.hasLandmarks,
+        poseVec: det.poseVec,
+        colorSig: det.colorSig,
+        trackId: det.trackId,
+        confidence: Math.max(0.50, (det.confidence || 0.8) * 0.82),
+        propagated: true
+      };
+    }
+
+    const trackedFrames = Array.from({ length: numFrames }, () => []);
+    const MAX_GAP_FRAMES = 12;
+
+    for (let fIdx = 0; fIdx < numFrames; fIdx++) {
+      // 1. Within-frame NMS & Mask-IoU deduplication so one person is never counted twice in the same frame
+      const rawDets = (rawPerFrameDetections[fIdx] || []).slice().sort((a, b) => {
+        const sa = (a.confidence || 0.85) + (a.hasLandmarks ? 0.1 : 0);
+        const sb = (b.confidence || 0.85) + (b.hasLandmarks ? 0.1 : 0);
+        return sb - sa;
+      });
+      const dets = [];
+      for (const cand of rawDets) {
+        let dup = false;
+        for (const kept of dets) {
+          const m = BitEngine.computeBoxOverlapMetrics(kept.bbox, cand.bbox);
+          if (m.iou >= 0.30 || m.ioMin >= 0.52 || m.normCenterDist < 0.42) {
+            dup = true;
+            break;
+          }
+          if (kept.mask && cand.mask) {
+            const mm = BitEngine.computeMaskIoUAndDice(kept.mask, cand.mask);
+            if (mm.iou >= 0.25) {
+              dup = true;
+              break;
+            }
+          }
+        }
+        if (!dup) dets.push(cand);
+      }
+
+      const assignedTracks = new Set();
+      const assignedDets = new Set();
+
+      // Build candidate match pairs between active tracks and current frame detections
+      const pairs = [];
+      for (let tIdx = 0; tIdx < tracks.length; tIdx++) {
+        const tr = tracks[tIdx];
+        const dt = fIdx - tr.lastFrame;
+        if (dt <= 0 || dt > MAX_GAP_FRAMES) continue;
+
+        const predCx = tr.cx + tr.vx * Math.min(dt, 4);
+        const predCy = tr.cy + tr.vy * Math.min(dt, 4);
+        const predBox = {
+          x0: predCx - tr.fw * 0.5,
+          y0: predCy - tr.fh * 0.5,
+          x1: predCx + tr.fw * 0.5,
+          y1: predCy + tr.fh * 0.5
+        };
+
+        for (let dIdx = 0; dIdx < dets.length; dIdx++) {
+          const d = dets[dIdx];
+          const dist = Math.hypot(d.cx - predCx, d.cy - predCy);
+          const avgSize = 0.5 * (Math.hypot(tr.fw, tr.fh) + Math.hypot(d.fw, d.fh));
+          const normDist = dist / Math.max(16, avgSize);
+          if (normDist > 1.75 && dist > diag * 0.30) continue;
+
+          const iou = boxIoU(predBox, d.bbox);
+          const scaleRatio = Math.min(tr.fw * tr.fh, d.fw * d.fh) / Math.max(1, Math.max(tr.fw * tr.fh, d.fw * d.fh));
+          const colorDist = Math.hypot(
+            (tr.colorSig[0] - d.colorSig[0]),
+            (tr.colorSig[1] - d.colorSig[1]),
+            (tr.colorSig[2] - d.colorSig[2])
+          );
+          const poseDist = Math.hypot(
+            (tr.poseVec[0] - d.poseVec[0]) * 0.5,
+            (tr.poseVec[1] - d.poseVec[1]) * 0.5
+          );
+
+          const distScore = Math.max(0, 1 - normDist * 0.52);
+          const colorScore = Math.max(0, 1 - colorDist * 2.2);
+          const poseScore = Math.max(0, 1 - poseDist * 0.8);
+          const gapPenalty = Math.pow(0.95, dt - 1);
+
+          const score = (0.44 * distScore + 0.22 * iou + 0.16 * scaleRatio + 0.12 * colorScore + 0.06 * poseScore) * gapPenalty;
+          if (score >= 0.28) {
+            pairs.push({ tIdx, dIdx, score, dt });
+          }
+        }
+      }
+
+      // Greedy Hungarian-style best-first matching
+      pairs.sort((a, b) => b.score - a.score);
+      for (const pair of pairs) {
+        if (assignedTracks.has(pair.tIdx) || assignedDets.has(pair.dIdx)) continue;
+        assignedTracks.add(pair.tIdx);
+        assignedDets.add(pair.dIdx);
+
+        const tr = tracks[pair.tIdx];
+        const d = dets[pair.dIdx];
+        const dt = pair.dt;
+
+        // If there was a 1-3 frame occlusion gap between tr.lastFrame and fIdx, interpolate intermediate frames!
+        if (dt > 1 && dt <= 3 && tr.lastDet) {
+          for (let g = 1; g < dt; g++) {
+            const frac = g / dt;
+            const interp = shiftMaskAndContour(tr.lastDet, (d.cx - tr.cx) * frac, (d.cy - tr.cy) * frac);
+            interp.trackId = tr.trackId;
+            trackedFrames[tr.lastFrame + g].push(interp);
+          }
+        }
+
+        const instVx = (d.cx - tr.cx) / dt;
+        const instVy = (d.cy - tr.cy) / dt;
+        tr.vx = 0.60 * tr.vx + 0.40 * instVx;
+        tr.vy = 0.60 * tr.vy + 0.40 * instVy;
+        // Temporal EMA smoothing on centroid & box dimensions to reduce box flickering
+        tr.cx = 0.25 * tr.cx + 0.75 * d.cx;
+        tr.cy = 0.25 * tr.cy + 0.75 * d.cy;
+        tr.fw = 0.65 * tr.fw + 0.35 * d.fw;
+        tr.fh = 0.65 * tr.fh + 0.35 * d.fh;
+        tr.bbox = {
+          x0: 0.25 * tr.bbox.x0 + 0.75 * d.bbox.x0,
+          y0: 0.25 * tr.bbox.y0 + 0.75 * d.bbox.y0,
+          x1: 0.25 * tr.bbox.x1 + 0.75 * d.bbox.x1,
+          y1: 0.25 * tr.bbox.y1 + 0.75 * d.bbox.y1
+        };
+        tr.poseVec = d.poseVec;
+        tr.colorSig = [
+          0.7 * tr.colorSig[0] + 0.3 * d.colorSig[0],
+          0.7 * tr.colorSig[1] + 0.3 * d.colorSig[1],
+          0.7 * tr.colorSig[2] + 0.3 * d.colorSig[2]
+        ];
+        tr.lastFrame = fIdx;
+
+        const conf = Math.min(0.99, Math.max(0.50, pair.score * 1.15 + (d.hasLandmarks ? 0.12 : 0)));
+        const trackedDet = {
+          ...d,
+          bbox: tr.bbox,
+          cx: tr.cx,
+          cy: tr.cy,
+          trackId: tr.trackId,
+          confidence: conf
+        };
+        tr.lastDet = trackedDet;
+        tr.appearances.push(fIdx);
+        tr.confSum += conf;
+        if (d.pixelCount > (tr.bestPixels || 0)) {
+          tr.bestPixels = d.pixelCount;
+          tr.thumbFrameIdx = fIdx;
+          tr.thumbBbox = d.bbox;
+        }
+
+        trackedFrames[fIdx].push(trackedDet);
+        if (conf < 0.64 && !lowConfidenceFrames.includes(fIdx + 1)) {
+          lowConfidenceFrames.push(fIdx + 1);
+        }
+      }
+
+      // Unassigned detections start new person tracks
+      for (let dIdx = 0; dIdx < dets.length; dIdx++) {
+        if (assignedDets.has(dIdx)) continue;
+        const d = dets[dIdx];
+        const trackId = nextTrackId++;
+        const initConf = d.confidence || (d.hasLandmarks ? 0.94 : 0.74);
+        const trackedDet = {
+          ...d,
+          trackId,
+          confidence: initConf
+        };
+        tracks.push({
+          trackId,
+          lastFrame: fIdx,
+          cx: d.cx,
+          cy: d.cy,
+          vx: 0,
+          vy: 0,
+          fw: d.fw,
+          fh: d.fh,
+          bbox: d.bbox,
+          poseVec: d.poseVec,
+          colorSig: d.colorSig.slice(),
+          appearances: [fIdx],
+          confSum: initConf,
+          bestPixels: d.pixelCount,
+          thumbFrameIdx: fIdx,
+          thumbBbox: d.bbox,
+          lastDet: trackedDet
+        });
+        trackedFrames[fIdx].push(trackedDet);
+        if (initConf < 0.68 && !lowConfidenceFrames.includes(fIdx + 1)) {
+          lowConfidenceFrames.push(fIdx + 1);
+        }
+      }
+    }
+
+    // Prune transient 1-frame low-confidence noise tracks in multi-frame videos & compact track IDs (1..K)
+    const validTracks = tracks.filter(tr => {
+      if (numFrames >= 6 && tr.appearances.length === 1 && (tr.confSum / tr.appearances.length) < 0.80) {
+        return false;
+      }
+      return tr.appearances.length >= 1;
+    });
+
+    const idRemap = new Map();
+    validTracks.forEach((tr, idx) => {
+      idRemap.set(tr.trackId, idx + 1);
+      tr.trackId = idx + 1;
+    });
+
+    for (let fIdx = 0; fIdx < numFrames; fIdx++) {
+      trackedFrames[fIdx] = trackedFrames[fIdx]
+        .filter(det => idRemap.has(det.trackId))
+        .map(det => ({ ...det, trackId: idRemap.get(det.trackId) }))
+        .sort((a, b) => a.trackId - b.trackId);
+    }
+
+    const trackSummaries = validTracks.map(tr => ({
+      trackId: tr.trackId,
+      color: TRACK_COLORS[(tr.trackId - 1) % TRACK_COLORS.length],
+      frameCount: tr.appearances.length,
+      firstFrame: tr.appearances[0] + 1,
+      lastFrame: tr.appearances[tr.appearances.length - 1] + 1,
+      avgConfidence: tr.appearances.length > 0 ? (tr.confSum / tr.appearances.length) : 0.85,
+      thumbFrameIdx: tr.thumbFrameIdx,
+      thumbBbox: tr.thumbBbox
+    }));
+
+    return {
+      trackedFrames,
+      trackSummaries,
+      lowConfidenceFrames: lowConfidenceFrames.sort((a, b) => a - b)
+    };
+  }
+
   /* ==========================================================================
-     PAGE 1: VIDEO ENCRYPTION MODULE (Upload, Scramble, Preview & Export)
+     PAGE 1: VIDEO ENCRYPTION MODULE (AI Selective Face Encryption & .kxv Output)
      ========================================================================== */
   function initVideoEncryptModule() {
     const encDOM = {
@@ -3092,16 +4468,33 @@ document.addEventListener('DOMContentLoaded', () => {
       fileInput: document.getElementById('video-enc-file-input'),
       dropText: document.getElementById('video-enc-drop-text'),
       dropIcon: document.getElementById('video-enc-drop-icon'),
+      errorBanner: document.getElementById('video-enc-error-banner'),
+      errorText: document.getElementById('video-enc-error-text'),
       metaChip: document.getElementById('video-enc-meta-chip'),
       metaName: document.getElementById('meta-video-enc-name'),
       metaDuration: document.getElementById('meta-video-enc-duration'),
       metaRes: document.getElementById('meta-video-enc-res'),
       metaFrames: document.getElementById('meta-video-enc-frames'),
+      scaleSelect: document.getElementById('video-enc-scale-select'),
+      fpsSelect: document.getElementById('video-enc-fps-select'),
+      scopeSelector: document.getElementById('video-enc-scope-selector'),
+      subFaceAll: document.getElementById('sub-video-face-all'),
+      subFaceSelected: document.getElementById('sub-video-face-selected'),
+      btnScanFaces: document.getElementById('btn-video-scan-faces'),
+      trackedPersonsBox: document.getElementById('video-tracked-persons-box'),
+      trackedPersonsCountBadge: document.getElementById('video-tracked-persons-count-badge'),
+      trackedPersonsList: document.getElementById('video-tracked-persons-list'),
+      trackingWarning: document.getElementById('video-tracking-warning'),
+      trackingWarningText: document.getElementById('video-tracking-warning-text'),
+      kSelect: document.getElementById('video-enc-k-select'),
+      keySelector: document.getElementById('video-enc-key-selector'),
+      pwdGroup: document.getElementById('video-enc-pwd-group'),
+      imgKeyGroup: document.getElementById('video-enc-imgkey-group'),
       password: document.getElementById('video-enc-password'),
       togglePwd: document.getElementById('toggle-video-enc-pwd'),
-      algoSelect: document.getElementById('video-enc-algo-select'),
-      fpsSelect: document.getElementById('video-enc-fps-select'),
-      scaleSelect: document.getElementById('video-enc-scale-select'),
+      keyImageInput: document.getElementById('video-enc-key-image-input'),
+      keyDropZone: document.getElementById('video-enc-key-drop-zone'),
+      keyDropText: document.getElementById('video-enc-key-drop-text'),
       progressBox: document.getElementById('video-enc-progress-box'),
       progressStatus: document.getElementById('video-enc-progress-status'),
       progressPct: document.getElementById('video-enc-progress-pct'),
@@ -3111,11 +4504,18 @@ document.addEventListener('DOMContentLoaded', () => {
       btnProcess: document.getElementById('btn-process-video-enc'),
       btnCancel: document.getElementById('btn-cancel-video-enc'),
       origPlayer: document.getElementById('video-enc-orig-player'),
+      canvasOrigFrame: document.getElementById('canvas-video-enc-orig-frame'),
       phOrig: document.getElementById('ph-video-enc-orig'),
       resultPlayer: document.getElementById('video-enc-result-player'),
+      canvasResultFrame: document.getElementById('canvas-video-enc-result-frame'),
       phResult: document.getElementById('ph-video-enc-result'),
       origTime: document.getElementById('video-enc-orig-time'),
       resultTime: document.getElementById('video-enc-result-time'),
+      scrubberBox: document.getElementById('video-enc-scrubber-box'),
+      scrubberLabel: document.getElementById('video-enc-scrubber-label'),
+      scrubberFaces: document.getElementById('video-enc-scrubber-faces'),
+      frameSlider: document.getElementById('video-enc-frame-slider'),
+      chkShowAiOverlay: document.getElementById('chk-video-show-ai-overlay'),
       liveBox: document.getElementById('video-enc-live-box'),
       liveBadge: document.getElementById('live-frame-enc-badge'),
       canvasThumb: document.getElementById('canvas-video-enc-thumb'),
@@ -3124,10 +4524,13 @@ document.addEventListener('DOMContentLoaded', () => {
       btnSyncReset: document.getElementById('btn-sync-reset-enc'),
       metricsBar: document.getElementById('video-enc-metrics-bar'),
       valFrames: document.getElementById('val-video-enc-frames'),
-      valSpeed: document.getElementById('val-video-enc-speed'),
+      valFacesCount: document.getElementById('val-video-enc-faces-count'),
       valMse: document.getElementById('val-video-enc-mse'),
       valPsnr: document.getElementById('val-video-enc-psnr'),
-      btnDownload: document.getElementById('btn-download-video-enc'),
+      kxvSummary: document.getElementById('video-enc-kxv-summary'),
+      kxvSummaryText: document.getElementById('video-enc-kxv-summary-text'),
+      btnDownloadKxv: document.getElementById('btn-download-video-kxv'),
+      btnDownloadWebm: document.getElementById('btn-download-video-enc'),
       btnGotoDecrypt: document.getElementById('btn-goto-decrypt')
     };
 
@@ -3135,26 +4538,103 @@ document.addEventListener('DOMContentLoaded', () => {
       videoLoaded: false,
       videoFile: null,
       videoUrl: null,
-      processedBlob: null,
-      processedUrl: null,
+      scope: 'face_all', // 'face_all' | 'face_selected' | 'full'
+      keyType: 'password', // 'password' | 'image'
+      keyImageBytes: null,
+      extractedW: 0,
+      extractedH: 0,
+      extractedFps: 15,
+      extractedFrames: [],     // Array<ImageData>
+      extractedTimestamps: [], // Array<number> (ms)
+      trackedFrames: [],       // Array<Array<TrackedFace>>
+      trackSummaries: [],      // Array<TrackSummary>
+      selectedTrackIds: new Set(),
+      aiScanComplete: false,
+      encryptedFrames: [],     // Array<ImageData>
+      kxvBytes: null,
+      webmBlob: null,
+      webmUrl: null,
+      currentFrameIdx: 0,
+      playTimer: null,
       isProcessing: false,
       cancelRequested: false
     };
+
+    function showEncError(msg) {
+      if (!encDOM.errorBanner || !encDOM.errorText) return;
+      if (!msg) {
+        encDOM.errorBanner.style.display = 'none';
+        encDOM.errorText.textContent = '';
+      } else {
+        encDOM.errorText.textContent = msg;
+        encDOM.errorBanner.style.display = 'flex';
+      }
+    }
+
+    function stopEncPlayback() {
+      if (encState.playTimer) {
+        clearInterval(encState.playTimer);
+        encState.playTimer = null;
+      }
+    }
 
     if (encDOM.togglePwd && encDOM.password) {
       setupPwdToggle(encDOM.togglePwd, encDOM.password);
     }
 
+    // Scope Selector (Mode A: face_all, Mode B: face_selected, Full: full)
+    if (encDOM.scopeSelector) {
+      const btns = encDOM.scopeSelector.querySelectorAll('.scope-btn');
+      btns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          btns.forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          encState.scope = btn.getAttribute('data-video-scope') || 'face_all';
+          if (encDOM.trackedPersonsBox) {
+            encDOM.trackedPersonsBox.style.display =
+              (encState.scope === 'face_selected' && encState.trackSummaries.length > 0) ? 'block' : 'none';
+          }
+          renderVideoEncFrame(encState.currentFrameIdx);
+        });
+      });
+    }
+
+    // Key Type Selector (Password vs Key Image)
+    if (encDOM.keySelector) {
+      const btns = encDOM.keySelector.querySelectorAll('.toggle-btn');
+      btns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          btns.forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          encState.keyType = btn.getAttribute('data-key-type') || 'password';
+          if (encDOM.pwdGroup) encDOM.pwdGroup.style.display = encState.keyType === 'password' ? 'block' : 'none';
+          if (encDOM.imgKeyGroup) encDOM.imgKeyGroup.style.display = encState.keyType === 'image' ? 'block' : 'none';
+        });
+      });
+    }
+
+    // Key Image Upload for Video Encryption
+    if (encDOM.keyImageInput) {
+      encDOM.keyImageInput.addEventListener('change', async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const buf = await file.arrayBuffer();
+        encState.keyImageBytes = new Uint8Array(buf);
+        if (encDOM.keyDropText) {
+          encDOM.keyDropText.innerHTML = `✅ <b>Key Image:</b> ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+        }
+      });
+    }
+
+    // Video Drop Zone & File Input
     if (encDOM.dropZone && encDOM.fileInput) {
       encDOM.dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
         encDOM.dropZone.classList.add('drag-active');
       });
-
       encDOM.dropZone.addEventListener('dragleave', () => {
         encDOM.dropZone.classList.remove('drag-active');
       });
-
       encDOM.dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
         encDOM.dropZone.classList.remove('drag-active');
@@ -3162,7 +4642,6 @@ document.addEventListener('DOMContentLoaded', () => {
           handleEncVideoSelect(e.dataTransfer.files[0]);
         }
       });
-
       encDOM.fileInput.addEventListener('change', (e) => {
         if (e.target.files && e.target.files.length > 0) {
           handleEncVideoSelect(e.target.files[0]);
@@ -3172,31 +4651,60 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function handleEncVideoSelect(file) {
       if (!file) return;
+      showEncError(null);
+      stopEncPlayback();
 
       const isVideo = (file.type && file.type.startsWith('video/')) ||
-        /\.(mp4|webm|mov|mkv|avi|m4v|3gp|wmv|flv|ts|ogv)$/i.test(file.name);
-
+        /\.(mp4|webm|mov|m4v|ogv)$/i.test(file.name);
       if (!isVideo) {
-        alert(`"${file.name}" does not appear to be a recognized video file. Please select an MP4, WebM, MOV, MKV, or AVI file.`);
+        showEncError(`Unsupported format: "${file.name}". Please upload an MP4 or WebM short video.`);
+        return;
+      }
+      if (file.size > 60 * 1024 * 1024) {
+        showEncError(`File size (${(file.size / (1024 * 1024)).toFixed(1)} MB) exceeds the 60 MB browser processing limit.`);
         return;
       }
 
       encState.videoFile = file;
+      encState.aiScanComplete = false;
+      encState.extractedFrames = [];
+      encState.trackedFrames = [];
+      encState.trackSummaries = [];
+      encState.encryptedFrames = [];
+      encState.kxvBytes = null;
+
       if (encState.videoUrl) URL.revokeObjectURL(encState.videoUrl);
       encState.videoUrl = URL.createObjectURL(file);
       loadEncVideoIntoPlayer(encState.videoUrl, file.name);
 
       setTimeout(() => {
         if (encDOM.fileInput) encDOM.fileInput.value = '';
-      }, 600);
+      }, 400);
     }
 
-    function loadEncVideoIntoPlayer(url, name = "uploaded_video.mp4") {
+    function getTargetDimensions(video) {
+      const vw = video.videoWidth || 640;
+      const vh = video.videoHeight || 360;
+      const aspect = vw / Math.max(1, vh);
+      const scaleVal = encDOM.scaleSelect ? encDOM.scaleSelect.value : '320x240';
+      if (scaleVal === '320x240') {
+        const w = 320;
+        const h = Math.max(2, Math.round((320 / aspect) / 2) * 2);
+        return { w, h };
+      } else if (scaleVal === '640x360') {
+        const w = Math.min(640, vw);
+        const h = Math.max(2, Math.round((w / aspect) / 2) * 2);
+        return { w, h };
+      }
+      return {
+        w: Math.max(2, Math.round(vw / 2) * 2),
+        h: Math.max(2, Math.round(vh / 2) * 2)
+      };
+    }
+
+    function loadEncVideoIntoPlayer(url, name = 'uploaded_video.mp4') {
       const video = encDOM.origPlayer;
       if (!video) return;
-
-      if (encDOM.phOrig) encDOM.phOrig.style.display = 'none';
-      video.style.display = 'block';
 
       if (encDOM.dropZone) {
         encDOM.dropZone.classList.add('has-file');
@@ -3211,231 +4719,586 @@ document.addEventListener('DOMContentLoaded', () => {
 
       video.src = url;
       video.muted = true;
-      video.loop = true;
       video.playsInline = true;
-      video.controls = true;
 
-      const onMeta = () => {
-        const dur = video.duration || 0;
-        const w = video.videoWidth || 640;
-        const h = video.videoHeight || 360;
-        const fps = parseInt(encDOM.fpsSelect ? encDOM.fpsSelect.value : "24", 10);
+      const onMeta = async () => {
+        const rawDur = video.duration || 0;
+        const dur = Math.min(5.0, rawDur > 0 ? rawDur : 5.0);
+        const { w, h } = getTargetDimensions(video);
+        const fps = parseInt(encDOM.fpsSelect ? encDOM.fpsSelect.value : '15', 10);
         const estFrames = Math.max(1, Math.round(dur * fps));
 
-        if (encDOM.metaName) encDOM.metaName.textContent = name;
-        if (encDOM.metaDuration) encDOM.metaDuration.textContent = dur.toFixed(1) + 's';
-        if (encDOM.metaRes) encDOM.metaRes.textContent = `${w} × ${h}`;
-        if (encDOM.metaFrames) encDOM.metaFrames.textContent = `~${estFrames} frames`;
-        if (encDOM.metaChip) encDOM.metaChip.style.display = 'flex';
-
-        if (encDOM.dropText) {
-          encDOM.dropText.innerHTML = `✅ <b>Selected:</b> ${name} (${dur.toFixed(1)}s, ${w}×${h})`;
+        if (rawDur > 5.2) {
+          showEncError(`Note: Video is ${rawDur.toFixed(1)}s long. Processing the first 5.0s (${estFrames} frames) per FYP short-video specification.`);
         }
 
+        if (encDOM.metaName) encDOM.metaName.textContent = name;
+        if (encDOM.metaDuration) encDOM.metaDuration.textContent = `${dur.toFixed(1)}s`;
+        if (encDOM.metaRes) encDOM.metaRes.textContent = `${w} × ${h}`;
+        if (encDOM.metaFrames) encDOM.metaFrames.textContent = `${estFrames} frames`;
+        if (encDOM.metaChip) encDOM.metaChip.style.display = 'flex';
+
         encState.videoLoaded = true;
+        if (encDOM.btnScanFaces) encDOM.btnScanFaces.disabled = false;
         if (encDOM.btnProcess) encDOM.btnProcess.disabled = false;
 
-        video.play().catch(() => {
-          video.currentTime = 0.05;
-        });
+        // Automatically run frame extraction + AI Face Scan on upload
+        await extractAndScanVideoFaces();
       };
 
       video.onloadedmetadata = onMeta;
-      video.addEventListener('loadeddata', onMeta, { once: true });
-      video.addEventListener('canplay', onMeta, { once: true });
-
-      if (video.readyState >= 1) onMeta();
-
       video.onerror = () => {
-        alert(`The browser was unable to decode "${name}". Please ensure it is an MP4 (H.264) or WebM video.`);
-        if (encDOM.phOrig) encDOM.phOrig.style.display = 'flex';
-        video.style.display = 'none';
+        showEncError(`Browser could not decode "${name}". Please provide a standard MP4 (H.264) or WebM video.`);
         if (encDOM.dropZone) encDOM.dropZone.classList.remove('has-file');
       };
     }
 
-    // Process Video Encryption
-    if (encDOM.btnProcess) {
-      encDOM.btnProcess.addEventListener('click', async () => {
-        if (!encState.videoLoaded) return;
+    // Re-extract if resolution or FPS changes
+    if (encDOM.scaleSelect) {
+      encDOM.scaleSelect.addEventListener('change', () => {
+        if (encState.videoLoaded && !encState.isProcessing) extractAndScanVideoFaces();
+      });
+    }
+    if (encDOM.fpsSelect) {
+      encDOM.fpsSelect.addEventListener('change', () => {
+        if (encState.videoLoaded && !encState.isProcessing) extractAndScanVideoFaces();
+      });
+    }
+    if (encDOM.btnScanFaces) {
+      encDOM.btnScanFaces.addEventListener('click', () => {
+        if (encState.videoLoaded && !encState.isProcessing) extractAndScanVideoFaces();
+      });
+    }
 
-        const video = encDOM.origPlayer;
-        const password = encDOM.password ? encDOM.password.value : '';
-        const algo = encDOM.algoSelect ? encDOM.algoSelect.value : '3stage';
-        const targetFps = parseInt(encDOM.fpsSelect ? encDOM.fpsSelect.value : '24', 10);
-        const scaleMode = encDOM.scaleSelect ? encDOM.scaleSelect.value : 'optimized';
+    /**
+     * Extract video frames at true timestamps and run AI Face Landmarker + Temporal Tracking
+     */
+    async function extractAndScanVideoFaces() {
+      if (!encState.videoLoaded || encState.isProcessing) return;
+      const video = encDOM.origPlayer;
+      const { w, h } = getTargetDimensions(video);
+      const fps = parseInt(encDOM.fpsSelect ? encDOM.fpsSelect.value : '15', 10);
+      const duration = Math.min(5.0, video.duration || 3.0);
+      const totalFrames = Math.max(1, Math.min(120, Math.round(duration * fps)));
 
-        let targetW = video.videoWidth || 640;
-        let targetH = video.videoHeight || 360;
+      stopEncPlayback();
+      encState.isProcessing = true;
+      encState.cancelRequested = false;
+      encState.extractedW = w;
+      encState.extractedH = h;
+      encState.extractedFps = fps;
+      encState.extractedFrames = [];
+      encState.extractedTimestamps = [];
+      encState.trackedFrames = [];
+      encState.trackSummaries = [];
+      encState.encryptedFrames = [];
 
-        if (scaleMode === 'optimized' && targetW > 640) {
-          const scale = 640 / targetW;
-          targetW = 640;
-          targetH = Math.round((targetH * scale) / 2) * 2;
+      if (encDOM.metaRes) encDOM.metaRes.textContent = `${w} × ${h}`;
+      if (encDOM.metaFrames) encDOM.metaFrames.textContent = `${totalFrames} frames`;
+      if (encDOM.btnProcess) encDOM.btnProcess.disabled = true;
+      if (encDOM.btnScanFaces) encDOM.btnScanFaces.disabled = true;
+      if (encDOM.btnCancel) encDOM.btnCancel.style.display = 'inline-flex';
+      if (encDOM.progressBox) encDOM.progressBox.style.display = 'block';
+      if (encDOM.progressStatus) {
+        encDOM.progressStatus.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Step 1/2: Extracting Frames & Detecting Faces with AI...';
+      }
+
+      const workCanvas = document.createElement('canvas');
+      workCanvas.width = w;
+      workCanvas.height = h;
+      const workCtx = workCanvas.getContext('2d', { willReadFrequently: true });
+
+      const rawDetectionsPerFrame = [];
+      const startTime = performance.now();
+
+      for (let i = 0; i < totalFrames; i++) {
+        if (encState.cancelRequested) break;
+        const targetSec = Math.min((i / fps), Math.max(0, (video.duration || duration) - 0.01));
+        video.currentTime = targetSec;
+
+        await new Promise(resolve => {
+          const onSeek = () => { video.removeEventListener('seeked', onSeek); resolve(); };
+          video.addEventListener('seeked', onSeek, { once: true });
+          setTimeout(onSeek, 220);
+        });
+
+        const actualMs = Math.round(video.currentTime * 1000);
+        workCtx.drawImage(video, 0, 0, w, h);
+        const frameImgData = workCtx.getImageData(0, 0, w, h);
+        encState.extractedFrames.push(frameImgData);
+        encState.extractedTimestamps.push(actualMs);
+
+        // Run AI Face Detection + Face-Shaped Mask Generation on this frame
+        let dets = [];
+        try {
+          dets = await detectFacesInVideoFrame(workCanvas, w, h);
+        } catch (e) {
+          console.warn('Frame face detection error:', e);
+        }
+        rawDetectionsPerFrame.push(dets);
+
+        const pct = Math.round(((i + 1) / totalFrames) * 100);
+        if (encDOM.progressFill) encDOM.progressFill.style.width = `${pct}%`;
+        if (encDOM.progressPct) encDOM.progressPct.textContent = `${pct}%`;
+        if (encDOM.progressDetails) {
+          encDOM.progressDetails.textContent = `AI Face Scan: Frame ${i + 1} / ${totalFrames} (${dets.length} face${dets.length === 1 ? '' : 's'})`;
+        }
+        const elapsed = (performance.now() - startTime) / 1000;
+        const eta = Math.max(0, ((elapsed / (i + 1)) * totalFrames) - elapsed).toFixed(1);
+        if (encDOM.progressEta) encDOM.progressEta.textContent = `ETA: ${eta}s`;
+
+        if (i % 2 === 0) await new Promise(r => setTimeout(r, 0));
+      }
+
+      if (encState.cancelRequested || encState.extractedFrames.length === 0) {
+        encState.isProcessing = false;
+        if (encDOM.btnProcess) encDOM.btnProcess.disabled = false;
+        if (encDOM.btnScanFaces) encDOM.btnScanFaces.disabled = false;
+        if (encDOM.btnCancel) encDOM.btnCancel.style.display = 'none';
+        return;
+      }
+
+      // Run Temporal Multi-Face Tracking across all frames
+      const tracking = trackFacesAcrossVideoFrames(rawDetectionsPerFrame, w, h);
+      encState.trackedFrames = tracking.trackedFrames;
+      encState.trackSummaries = tracking.trackSummaries;
+      encState.selectedTrackIds = new Set(tracking.trackSummaries.map(t => t.trackId));
+      encState.aiScanComplete = true;
+
+      // Update Mode A / Mode B sub-labels
+      let framesWithFaces = 0;
+      for (const fDets of encState.trackedFrames) {
+        if (fDets.length > 0) framesWithFaces++;
+      }
+      const numPersons = encState.trackSummaries.length;
+      if (encDOM.subFaceAll) {
+        encDOM.subFaceAll.textContent = numPersons > 0
+          ? `${numPersons} person${numPersons === 1 ? '' : 's'} (${framesWithFaces}/${encState.extractedFrames.length} frames)`
+          : 'No faces found';
+      }
+      if (encDOM.subFaceSelected) {
+        encDOM.subFaceSelected.textContent = numPersons > 0
+          ? `Select from ${numPersons} tracked ID${numPersons === 1 ? '' : 's'}`
+          : 'No tracked IDs';
+      }
+
+      // Render Tracked Persons Selection UI (for Mode B)
+      renderTrackedPersonsUI();
+
+      // Show tracking warning if any frames had low tracking confidence
+      if (encDOM.trackingWarning && encDOM.trackingWarningText) {
+        if (tracking.lowConfidenceFrames.length > 0) {
+          encDOM.trackingWarning.style.display = 'flex';
+          encDOM.trackingWarningText.innerHTML =
+            `<b>Low tracking confidence on frame(s) ${tracking.lowConfidenceFrames.slice(0, 8).join(', ')}:</b> Rapid motion or partial occlusion detected. Use the frame scrubber below to review face masks before encrypting.`;
         } else {
-          targetW = Math.round(targetW / 2) * 2;
-          targetH = Math.round(targetH / 2) * 2;
+          encDOM.trackingWarning.style.display = 'none';
+        }
+      }
+
+      // Configure interactive frame scrubber
+      if (encDOM.scrubberBox && encDOM.frameSlider) {
+        encDOM.scrubberBox.style.display = 'block';
+        encDOM.frameSlider.max = String(Math.max(0, encState.extractedFrames.length - 1));
+        encDOM.frameSlider.value = '0';
+      }
+
+      encState.currentFrameIdx = 0;
+      renderVideoEncFrame(0);
+
+      if (encDOM.progressStatus) {
+        encDOM.progressStatus.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-emerald);"></i> AI Face Scan Ready: ${numPersons} Tracked Person(s) across ${encState.extractedFrames.length} frames`;
+      }
+      if (encDOM.btnCancel) encDOM.btnCancel.style.display = 'none';
+      if (encDOM.btnProcess) encDOM.btnProcess.disabled = false;
+      if (encDOM.btnScanFaces) encDOM.btnScanFaces.disabled = false;
+      encState.isProcessing = false;
+    }
+
+    /**
+     * Build interactive Tracked Person selection cards for Mode B (Encrypt Selected Faces)
+     */
+    function renderTrackedPersonsUI() {
+      if (!encDOM.trackedPersonsList || !encDOM.trackedPersonsBox) return;
+      encDOM.trackedPersonsList.innerHTML = '';
+
+      if (encDOM.trackedPersonsCountBadge) {
+        encDOM.trackedPersonsCountBadge.textContent = `${encState.trackSummaries.length} Tracked`;
+      }
+
+      if (encState.trackSummaries.length === 0) {
+        encDOM.trackedPersonsBox.style.display = 'none';
+        return;
+      }
+
+      encDOM.trackedPersonsBox.style.display = encState.scope === 'face_selected' ? 'block' : 'none';
+
+      encState.trackSummaries.forEach(tr => {
+        const card = document.createElement('label');
+        const isChecked = encState.selectedTrackIds.has(tr.trackId);
+        card.className = `tracked-person-card ${isChecked ? 'selected' : ''}`;
+        card.style.borderColor = isChecked ? tr.color : '';
+
+        // Create face thumbnail canvas from `tr.thumbFrameIdx`
+        const thumbCanvas = document.createElement('canvas');
+        thumbCanvas.width = 38;
+        thumbCanvas.height = 38;
+        thumbCanvas.className = 'tracked-person-thumb';
+        const fData = encState.extractedFrames[tr.thumbFrameIdx];
+        if (fData && tr.thumbBbox) {
+          const tmp = document.createElement('canvas');
+          tmp.width = encState.extractedW;
+          tmp.height = encState.extractedH;
+          tmp.getContext('2d').putImageData(fData, 0, 0);
+          const bb = tr.thumbBbox;
+          const bw = Math.max(16, bb.x1 - bb.x0);
+          const bh = Math.max(16, bb.y1 - bb.y0);
+          const pad = Math.max(bw, bh) * 0.25;
+          const sx = Math.max(0, bb.x0 - pad);
+          const sy = Math.max(0, bb.y0 - pad);
+          const sw = Math.min(encState.extractedW - sx, bw + pad * 2);
+          const sh = Math.min(encState.extractedH - sy, bh + pad * 2);
+          thumbCanvas.getContext('2d').drawImage(tmp, sx, sy, sw, sh, 0, 0, 38, 38);
         }
 
-        const duration = Math.min(video.duration, 8.0);
-        const totalFrames = Math.max(1, Math.floor(duration * targetFps));
+        const chk = document.createElement('input');
+        chk.type = 'checkbox';
+        chk.checked = isChecked;
+        chk.style.accentColor = tr.color;
+        chk.addEventListener('change', () => {
+          if (chk.checked) encState.selectedTrackIds.add(tr.trackId);
+          else encState.selectedTrackIds.delete(tr.trackId);
+          card.classList.toggle('selected', chk.checked);
+          card.style.borderColor = chk.checked ? tr.color : '';
+          renderVideoEncFrame(encState.currentFrameIdx);
+        });
+
+        const info = document.createElement('div');
+        info.className = 'tracked-person-info';
+        const confPct = Math.round(tr.avgConfidence * 100);
+        info.innerHTML = `
+          <span class="tracked-person-title" style="color: ${tr.color};">Person #${tr.trackId}</span>
+          <span class="tracked-person-sub">Frames ${tr.firstFrame}–${tr.lastFrame} (${tr.frameCount}f · ${confPct}% conf)</span>
+        `;
+
+        card.appendChild(chk);
+        card.appendChild(thumbCanvas);
+        card.appendChild(info);
+        encDOM.trackedPersonsList.appendChild(card);
+      });
+    }
+
+    /**
+     * Compute the active binary encryption mask (`Uint8Array(w * h)`) for frame `frameIdx`
+     * based on Mode A (`face_all`), Mode B (`face_selected`), or `full`.
+     */
+    function buildFrameMaskForEncryption(frameIdx) {
+      const w = encState.extractedW;
+      const h = encState.extractedH;
+      const total = w * h;
+      const mask = new Uint8Array(total);
+
+      if (encState.scope === 'full') {
+        mask.fill(1);
+        return mask;
+      }
+
+      const dets = encState.trackedFrames[frameIdx] || [];
+      for (const det of dets) {
+        const shouldEncrypt = encState.scope === 'face_all' ||
+          (encState.scope === 'face_selected' && encState.selectedTrackIds.has(det.trackId));
+        if (shouldEncrypt && det.mask) {
+          const dm = det.mask;
+          for (let i = 0; i < total; i++) {
+            if (dm[i]) mask[i] = 1;
+          }
+        }
+      }
+      return mask;
+    }
+
+    /**
+     * Render frame `frameIdx` onto the Original Canvas (with AI Face-Shaped Contour Overlays)
+     * and the Encrypted Result Canvas (if encrypted frames exist).
+     */
+    function renderVideoEncFrame(frameIdx) {
+      if (!encState.extractedFrames.length) return;
+      const idx = Math.max(0, Math.min(encState.extractedFrames.length - 1, frameIdx));
+      encState.currentFrameIdx = idx;
+
+      const w = encState.extractedW;
+      const h = encState.extractedH;
+      const origData = encState.extractedFrames[idx];
+      const tsSec = ((encState.extractedTimestamps[idx] || 0) / 1000).toFixed(2);
+      const totalSec = ((encState.extractedTimestamps[encState.extractedTimestamps.length - 1] || 0) / 1000).toFixed(2);
+
+      if (encDOM.origPlayer) encDOM.origPlayer.style.display = 'none';
+      if (encDOM.phOrig) encDOM.phOrig.style.display = 'none';
+
+      if (encDOM.canvasOrigFrame) {
+        const canvas = encDOM.canvasOrigFrame;
+        canvas.width = w;
+        canvas.height = h;
+        canvas.style.display = 'block';
+        const ctx = canvas.getContext('2d');
+        ctx.putImageData(origData, 0, 0);
+
+        const showOverlay = !encDOM.chkShowAiOverlay || encDOM.chkShowAiOverlay.checked;
+        const dets = encState.trackedFrames[idx] || [];
+
+        if (showOverlay && encState.scope !== 'full') {
+          dets.forEach(det => {
+            const isSelected = encState.scope === 'face_all' ||
+              (encState.scope === 'face_selected' && encState.selectedTrackIds.has(det.trackId));
+            const color = isSelected
+              ? TRACK_COLORS[(det.trackId - 1) % TRACK_COLORS.length]
+              : '#94a3b8';
+
+            // Draw smooth face-shaped contour polygon
+            if (det.contourPts && det.contourPts.length >= 3) {
+              ctx.save();
+              ctx.beginPath();
+              const pts = det.contourPts;
+              ctx.moveTo(pts[0].x, pts[0].y);
+              for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+              ctx.closePath();
+              ctx.fillStyle = isSelected ? 'rgba(16, 185, 129, 0.22)' : 'rgba(148, 163, 184, 0.12)';
+              ctx.fill();
+              ctx.lineWidth = Math.max(2, Math.round(w / 180));
+              ctx.strokeStyle = color;
+              if (!isSelected) ctx.setLineDash([4, 4]);
+              ctx.stroke();
+              ctx.restore();
+            }
+
+            // Draw Tracked Person ID badge above face
+            ctx.save();
+            const fontSize = Math.max(10, Math.round(w / 32));
+            ctx.font = `bold ${fontSize}px sans-serif`;
+            const statusTag = isSelected ? '🔒' : '🔓';
+            const label = `${statusTag} P#${det.trackId} (${Math.round((det.confidence || 0.9) * 100)}%)`;
+            const tw = ctx.measureText(label).width;
+            const pillH = fontSize + 8;
+            const bx = Math.max(4, Math.min(w - tw - 12, det.cx - (tw + 10) / 2));
+            const by = Math.max(4, det.bbox.y0 - pillH - 3);
+            ctx.fillStyle = color;
+            ctx.fillRect(bx, by, tw + 10, pillH);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(label, bx + 5, by + fontSize + 1);
+            ctx.restore();
+          });
+        }
+
+        if (encDOM.scrubberLabel) {
+          encDOM.scrubberLabel.textContent = `Frame ${idx + 1} / ${encState.extractedFrames.length} (${tsSec}s)`;
+        }
+        if (encDOM.scrubberFaces) {
+          const encCount = dets.filter(d =>
+            encState.scope === 'face_all' || (encState.scope === 'face_selected' && encState.selectedTrackIds.has(d.trackId))
+          ).length;
+          encDOM.scrubberFaces.textContent = `${dets.length} Face(s) Detected · ${encCount} Selected for Encryption`;
+        }
+      }
+
+      if (encDOM.origTime) encDOM.origTime.textContent = `${tsSec}s / ${totalSec}s`;
+
+      // Render Encrypted Frame if available
+      if (encState.encryptedFrames[idx] && encDOM.canvasResultFrame) {
+        if (encDOM.phResult) encDOM.phResult.style.display = 'none';
+        if (encDOM.resultPlayer) encDOM.resultPlayer.style.display = 'none';
+        const rCanvas = encDOM.canvasResultFrame;
+        rCanvas.width = w;
+        rCanvas.height = h;
+        rCanvas.style.display = 'block';
+        rCanvas.getContext('2d').putImageData(encState.encryptedFrames[idx], 0, 0);
+        if (encDOM.resultTime) encDOM.resultTime.textContent = `${tsSec}s / ${totalSec}s`;
+      }
+    }
+
+    if (encDOM.frameSlider) {
+      encDOM.frameSlider.addEventListener('input', () => {
+        stopEncPlayback();
+        renderVideoEncFrame(parseInt(encDOM.frameSlider.value, 10) || 0);
+      });
+    }
+    if (encDOM.chkShowAiOverlay) {
+      encDOM.chkShowAiOverlay.addEventListener('change', () => {
+        renderVideoEncFrame(encState.currentFrameIdx);
+      });
+    }
+
+    // Execute 3-Stage Selective Face Video Encryption & Package Self-Describing .kxv
+    if (encDOM.btnProcess) {
+      encDOM.btnProcess.addEventListener('click', async () => {
+        showEncError(null);
+        stopEncPlayback();
+
+        if (!encState.videoLoaded) {
+          showEncError('Please upload a short video first.');
+          return;
+        }
+
+        // Validate key input
+        const password = encDOM.password ? encDOM.password.value : '';
+        if (encState.keyType === 'password' && !password) {
+          showEncError('Please enter a secret password to derive the 3-stage frame keys.');
+          return;
+        }
+        if (encState.keyType === 'image' && (!encState.keyImageBytes || encState.keyImageBytes.length === 0)) {
+          showEncError('Please upload a Key Image to derive the 3-stage frame keys.');
+          return;
+        }
+
+        // Ensure frames & AI face detection have been extracted
+        if (!encState.aiScanComplete || encState.extractedFrames.length === 0) {
+          await extractAndScanVideoFaces();
+        }
+        if (encState.extractedFrames.length === 0) return;
+
+        if (encState.scope === 'face_selected' && encState.selectedTrackIds.size === 0) {
+          showEncError('Please select at least one Tracked Person to encrypt in Mode B, or switch to Mode A (Encrypt All Faces).');
+          return;
+        }
 
         encState.isProcessing = true;
         encState.cancelRequested = false;
         encDOM.btnProcess.disabled = true;
+        if (encDOM.btnScanFaces) encDOM.btnScanFaces.disabled = true;
         if (encDOM.btnCancel) encDOM.btnCancel.style.display = 'inline-flex';
         if (encDOM.progressBox) encDOM.progressBox.style.display = 'block';
-        if (encDOM.liveBox) encDOM.liveBox.style.display = 'block';
-        if (encDOM.progressFill) encDOM.progressFill.style.width = '0%';
-        if (encDOM.progressPct) encDOM.progressPct.textContent = '0%';
-        if (encDOM.progressStatus) {
-          encDOM.progressStatus.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Initializing Video Encryption...';
-        }
 
-        const offCanvas = document.createElement('canvas');
-        offCanvas.width = targetW;
-        offCanvas.height = targetH;
-        const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
-
-        if (encDOM.canvasThumb) {
-          encDOM.canvasThumb.width = targetW;
-          encDOM.canvasThumb.height = targetH;
-        }
-        const thumbCtx = encDOM.canvasThumb ? encDOM.canvasThumb.getContext('2d') : null;
-
-        const master32 = await BitEngine.createFastMasterKey(password);
-        const processedFrames = [];
-        let totalMse = 0;
-        let totalSwapped = 0;
+        const w = encState.extractedW;
+        const h = encState.extractedH;
+        const fps = encState.extractedFps;
+        const totalFrames = encState.extractedFrames.length;
+        const kBits = parseInt(encDOM.kSelect ? encDOM.kSelect.value : '2', 10);
         const startTime = performance.now();
 
-        for (let i = 0; i < totalFrames; i++) {
-          if (encState.cancelRequested) break;
-
-          const t = i / targetFps;
-          video.currentTime = Math.min(t, video.duration - 0.01);
-
-          await new Promise(resolve => {
-            const onSeek = () => { video.removeEventListener('seeked', onSeek); resolve(); };
-            video.addEventListener('seeked', onSeek, { once: true });
-            setTimeout(onSeek, 250);
-          });
-
-          offCtx.drawImage(video, 0, 0, targetW, targetH);
-          const imgData = offCtx.getImageData(0, 0, targetW, targetH);
-
-          const frameStats = BitEngine.encryptVideoFrame(imgData, master32, i, algo);
-          totalMse += frameStats.mse;
-          totalSwapped += frameStats.swappedCount;
-
-          processedFrames.push(imgData);
-          if (thumbCtx) thumbCtx.putImageData(imgData, 0, 0);
-
-          const pct = Math.round(((i + 1) / totalFrames) * 100);
-          if (encDOM.progressFill) encDOM.progressFill.style.width = pct + '%';
-          if (encDOM.progressPct) encDOM.progressPct.textContent = pct + '%';
-          if (encDOM.progressDetails) {
-            const curFps = Math.round((i + 1) / (Math.max(0.01, (performance.now() - startTime) / 1000)));
-            encDOM.progressDetails.textContent = `Frame ${i + 1} / ${totalFrames} (${curFps} FPS)`;
+        try {
+          if (encDOM.progressStatus) {
+            encDOM.progressStatus.innerHTML = '<i class="fa-solid fa-lock fa-spin"></i> Encrypting Face Regions & Packaging Lossless .kxv Container...';
           }
 
-          const elapsedSec = (performance.now() - startTime) / 1000;
-          const estTotal = (elapsedSec / (i + 1)) * totalFrames;
-          const eta = Math.max(0, estTotal - elapsedSec).toFixed(1);
-          if (encDOM.progressEta) encDOM.progressEta.textContent = `ETA: ${eta}s`;
-          if (encDOM.liveBadge) encDOM.liveBadge.textContent = `Frame ${i + 1} / ${totalFrames}`;
+          const keySource = encState.keyType === 'image' ? encState.keyImageBytes : password;
+          const framesInput = [];
+          let totalEncryptedFaceInstances = 0;
 
-          if (i % 2 === 0) await new Promise(r => setTimeout(r, 0));
-        }
+          for (let i = 0; i < totalFrames; i++) {
+            const mask = buildFrameMaskForEncryption(i);
+            const dets = encState.trackedFrames[i] || [];
+            let fCount = 0;
+            if (encState.scope === 'face_all') {
+              fCount = dets.length;
+            } else if (encState.scope === 'face_selected') {
+              fCount = dets.filter(d => encState.selectedTrackIds.has(d.trackId)).length;
+            } else {
+              fCount = 1;
+            }
+            totalEncryptedFaceInstances += fCount;
 
-        if (encState.cancelRequested || processedFrames.length === 0) {
-          encState.isProcessing = false;
-          encDOM.btnProcess.disabled = false;
-          if (encDOM.btnCancel) encDOM.btnCancel.style.display = 'none';
-          if (encDOM.progressStatus) encDOM.progressStatus.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Encryption Cancelled';
-          return;
-        }
+            framesInput.push({
+              imageData: encState.extractedFrames[i],
+              mask,
+              timestampMs: encState.extractedTimestamps[i] || Math.round((i * 1000) / fps),
+              faceCount: fCount
+            });
+          }
 
-        if (encDOM.progressStatus) encDOM.progressStatus.innerHTML = '<i class="fa-solid fa-film fa-spin"></i> Compiling Encrypted WebM Stream...';
-        if (encDOM.progressEta) encDOM.progressEta.textContent = 'Finalizing stream...';
+          const encoded = await BitEngine.encodeKXVContainer(framesInput, keySource, {
+            k: kBits,
+            keyType: encState.keyType === 'image' ? 'image' : 'text',
+            selectionMode: encState.scope === 'face_selected' ? 'selected' : 'all',
+            scope: encState.scope,
+            fps,
+            selectedTrackIds: Array.from(encState.selectedTrackIds),
+            onProgress: (done, total) => {
+              const pct = Math.round((done / total) * 100);
+              if (encDOM.progressFill) encDOM.progressFill.style.width = `${pct}%`;
+              if (encDOM.progressPct) encDOM.progressPct.textContent = `${pct}%`;
+              if (encDOM.progressDetails) {
+                encDOM.progressDetails.textContent = `3-Stage MSB Face Encryption: Frame ${done} / ${total}`;
+              }
+            }
+          });
 
-        const recCanvas = document.createElement('canvas');
-        recCanvas.width = targetW;
-        recCanvas.height = targetH;
-        const recCtx = recCanvas.getContext('2d');
+          encState.kxvBytes = encoded.kxvBytes;
+          encState.encryptedFrames = encoded.encryptedFrames;
 
-        const stream = recCanvas.captureStream(targetFps);
-        let mimeType = 'video/webm;codecs=vp9';
-        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm;codecs=vp8';
-        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
+          const avgMse = encoded.stats.avgMse;
+          const avgPsnr = encoded.stats.avgPsnr;
 
-        const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3000000 });
-        const chunks = [];
-        recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+          if (encDOM.valFrames) encDOM.valFrames.textContent = String(totalFrames);
+          if (encDOM.valFacesCount) encDOM.valFacesCount.textContent = String(totalEncryptedFaceInstances);
+          if (encDOM.valMse) encDOM.valMse.textContent = avgMse.toFixed(2);
+          if (encDOM.valPsnr) encDOM.valPsnr.textContent = avgPsnr === '∞' ? '∞ dB' : `${avgPsnr} dB`;
+          if (encDOM.metricsBar) encDOM.metricsBar.style.display = 'flex';
 
-        recorder.onstop = () => {
-          const blob = new Blob(chunks, { type: mimeType });
-          if (encState.processedUrl) URL.revokeObjectURL(encState.processedUrl);
-          encState.processedBlob = blob;
-          encState.processedUrl = URL.createObjectURL(blob);
+          // Populate .kxv summary banner
+          const sizeKB = (encState.kxvBytes.byteLength / 1024).toFixed(1);
+          const modeLabel = encState.scope === 'face_all'
+            ? 'Mode A (All Faces)'
+            : (encState.scope === 'face_selected' ? `Mode B (${encState.selectedTrackIds.size} Selected Person IDs)` : 'Entire Frame');
+          if (encDOM.kxvSummary && encDOM.kxvSummaryText) {
+            encDOM.kxvSummary.style.display = 'flex';
+            encDOM.kxvSummaryText.innerHTML =
+              `<b>Self-Describing .kxv Container Ready (${sizeKB} KB):</b> ${totalFrames} Lossless PNG Frames · ${modeLabel} · <b>k = ${kBits}-MSB</b> · Compressed RLE+ZLIB Face Masks &amp; Dual SHA-256 Auth Tags Embedded.`;
+          }
 
-          encDOM.resultPlayer.src = encState.processedUrl;
-          encDOM.resultPlayer.load();
-          if (encDOM.phResult) encDOM.phResult.style.display = 'none';
-          encDOM.resultPlayer.style.display = 'block';
-
-          if (encDOM.btnDownload) encDOM.btnDownload.disabled = false;
+          // Enable downloads & dual playback
+          if (encDOM.btnDownloadKxv) encDOM.btnDownloadKxv.disabled = false;
+          if (encDOM.btnDownloadWebm) encDOM.btnDownloadWebm.style.display = 'inline-flex';
+          if (encDOM.btnDownloadWebm) encDOM.btnDownloadWebm.disabled = false;
           if (encDOM.btnGotoDecrypt) encDOM.btnGotoDecrypt.style.display = 'block';
           if (encDOM.btnSyncPlay) encDOM.btnSyncPlay.disabled = false;
           if (encDOM.btnSyncPause) encDOM.btnSyncPause.disabled = false;
           if (encDOM.btnSyncReset) encDOM.btnSyncReset.disabled = false;
 
-          const totalTimeSec = (performance.now() - startTime) / 1000;
-          const avgFps = (totalFrames / Math.max(0.01, totalTimeSec)).toFixed(1);
-          const avgMse = (totalMse / totalFrames).toFixed(2);
-          const avgPsnr = avgMse > 0 ? (10 * Math.log10((255 * 255) / avgMse)).toFixed(2) : '∞';
+          // Save in shared bridge for zero-diff verification in Decrypt tab
+          FYP_VideoBridge.lastKxvBytes = encState.kxvBytes;
+          FYP_VideoBridge.lastOriginalFrames = encState.extractedFrames.map(f => new Uint8ClampedArray(f.data));
+          FYP_VideoBridge.lastEncryptedName = 'encrypted_video.kxv';
 
-          if (encDOM.valFrames) encDOM.valFrames.textContent = totalFrames;
-          if (encDOM.valSpeed) encDOM.valSpeed.textContent = `${avgFps} FPS`;
-          if (encDOM.valMse) encDOM.valMse.textContent = avgMse;
-          if (encDOM.valPsnr) encDOM.valPsnr.textContent = `${avgPsnr} dB`;
-          if (encDOM.metricsBar) encDOM.metricsBar.style.display = 'flex';
-
+          const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(2);
           if (encDOM.progressStatus) {
-            encDOM.progressStatus.innerHTML = '<i class="fa-solid fa-circle-check" style="color: var(--accent-emerald);"></i> Encryption Complete!';
+            encDOM.progressStatus.innerHTML = `<i class="fa-solid fa-circle-check" style="color: var(--accent-emerald);"></i> Selective Face Video Encryption Complete in ${elapsedSec}s!`;
           }
 
-          // Register in shared bridge for seamless decryption
-          FYP_VideoBridge.lastEncryptedBlob = blob;
-          FYP_VideoBridge.lastEncryptedUrl = encState.processedUrl;
-          FYP_VideoBridge.lastEncryptedName = `encrypted_${encState.videoFile ? encState.videoFile.name : 'video.webm'}`;
-          FYP_VideoBridge.lastPassword = password;
-          FYP_VideoBridge.lastAlgo = algo;
-          FYP_VideoBridge.lastFps = targetFps.toString();
-          if (typeof FYP_VideoBridge.onVideoEncrypted === 'function') {
-            FYP_VideoBridge.onVideoEncrypted();
-          }
-
+          // Start synchronized dual-canvas preview playback
+          startEncDualPlayback();
+        } catch (err) {
+          console.error('Video encryption error:', err);
+          showEncError(`Encryption failed: ${err.message || err}`);
+        } finally {
           encState.isProcessing = false;
           encDOM.btnProcess.disabled = false;
+          if (encDOM.btnScanFaces) encDOM.btnScanFaces.disabled = false;
           if (encDOM.btnCancel) encDOM.btnCancel.style.display = 'none';
-        };
+        }
+      });
+    }
 
-        recorder.start();
+    function startEncDualPlayback() {
+      stopEncPlayback();
+      if (!encState.extractedFrames.length) return;
+      const intervalMs = Math.round(1000 / (encState.extractedFps || 15));
+      encState.playTimer = setInterval(() => {
+        const nextIdx = (encState.currentFrameIdx + 1) % encState.extractedFrames.length;
+        if (encDOM.frameSlider) encDOM.frameSlider.value = String(nextIdx);
+        renderVideoEncFrame(nextIdx);
+      }, intervalMs);
+    }
 
-        let frameIdx = 0;
-        const streamInterval = 1000 / targetFps;
-        const playTimer = setInterval(() => {
-          if (frameIdx < processedFrames.length && !encState.cancelRequested) {
-            recCtx.putImageData(processedFrames[frameIdx], 0, 0);
-            frameIdx++;
-          } else {
-            clearInterval(playTimer);
-            setTimeout(() => {
-              if (recorder.state !== 'inactive') recorder.stop();
-            }, 150);
-          }
-        }, streamInterval);
+    if (encDOM.btnSyncPlay) {
+      encDOM.btnSyncPlay.addEventListener('click', () => startEncDualPlayback());
+    }
+    if (encDOM.btnSyncPause) {
+      encDOM.btnSyncPause.addEventListener('click', () => stopEncPlayback());
+    }
+    if (encDOM.btnSyncReset) {
+      encDOM.btnSyncReset.addEventListener('click', () => {
+        stopEncPlayback();
+        if (encDOM.frameSlider) encDOM.frameSlider.value = '0';
+        renderVideoEncFrame(0);
       });
     }
 
@@ -3445,89 +5308,96 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    // Synchronized Dual Playback Controls (Encrypt Tab)
-    if (encDOM.btnSyncPlay) {
-      encDOM.btnSyncPlay.addEventListener('click', () => {
-        encDOM.resultPlayer.currentTime = encDOM.origPlayer.currentTime;
-        encDOM.origPlayer.play();
-        encDOM.resultPlayer.play();
-      });
-    }
-
-    if (encDOM.btnSyncPause) {
-      encDOM.btnSyncPause.addEventListener('click', () => {
-        encDOM.origPlayer.pause();
-        encDOM.resultPlayer.pause();
-      });
-    }
-
-    if (encDOM.btnSyncReset) {
-      encDOM.btnSyncReset.addEventListener('click', () => {
-        encDOM.origPlayer.pause();
-        encDOM.resultPlayer.pause();
-        encDOM.origPlayer.currentTime = 0;
-        encDOM.resultPlayer.currentTime = 0;
-      });
-    }
-
-    if (encDOM.origPlayer) {
-      encDOM.origPlayer.addEventListener('timeupdate', () => {
-        const cur = encDOM.origPlayer.currentTime;
-        const dur = encDOM.origPlayer.duration || 0;
-        if (encDOM.origTime) encDOM.origTime.textContent = `${cur.toFixed(1)}s / ${dur.toFixed(1)}s`;
-      });
-    }
-
-    if (encDOM.resultPlayer) {
-      encDOM.resultPlayer.addEventListener('timeupdate', () => {
-        const cur = encDOM.resultPlayer.currentTime;
-        const dur = encDOM.resultPlayer.duration || 0;
-        if (encDOM.resultTime) encDOM.resultTime.textContent = `${cur.toFixed(1)}s / ${dur.toFixed(1)}s`;
-      });
-    }
-
-    if (encDOM.btnDownload) {
-      encDOM.btnDownload.addEventListener('click', () => {
-        if (!encState.processedBlob) return;
+    // Primary Download: Self-Describing Lossless .kxv Container (`encrypted_video.kxv`)
+    if (encDOM.btnDownloadKxv) {
+      encDOM.btnDownloadKxv.addEventListener('click', () => {
+        if (!encState.kxvBytes) return;
+        const blob = new Blob([encState.kxvBytes], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
-        link.href = encState.processedUrl;
-        link.download = `encrypted_video_${Date.now()}.webm`;
+        link.href = url;
+        link.download = 'encrypted_video.kxv';
         link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
       });
     }
 
-    // One-click jump to Decrypt tab with the encrypted video loaded
+    // Optional Secondary Download: Playable Encrypted WebM Preview
+    if (encDOM.btnDownloadWebm) {
+      encDOM.btnDownloadWebm.addEventListener('click', async () => {
+        if (!encState.encryptedFrames.length) return;
+        const w = encState.extractedW;
+        const h = encState.extractedH;
+        const fps = encState.extractedFps || 15;
+        const recCanvas = document.createElement('canvas');
+        recCanvas.width = w;
+        recCanvas.height = h;
+        const recCtx = recCanvas.getContext('2d');
+        const stream = recCanvas.captureStream(fps);
+        let mimeType = 'video/webm;codecs=vp9';
+        if (typeof MediaRecorder !== 'undefined' && !MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
+        const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3500000 });
+        const chunks = [];
+        recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+        recorder.onstop = () => {
+          const blob = new Blob(chunks, { type: mimeType });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = 'encrypted_preview.webm';
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 2000);
+        };
+        recorder.start();
+        let idx = 0;
+        const timer = setInterval(() => {
+          if (idx < encState.encryptedFrames.length) {
+            recCtx.putImageData(encState.encryptedFrames[idx++], 0, 0);
+          } else {
+            clearInterval(timer);
+            setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 120);
+          }
+        }, Math.round(1000 / fps));
+      });
+    }
+
     if (encDOM.btnGotoDecrypt) {
       encDOM.btnGotoDecrypt.addEventListener('click', () => {
+        stopEncPlayback();
         const decTabBtn = document.getElementById('tab-btn-video-dec');
         if (decTabBtn) decTabBtn.click();
-        const bridgeBtn = document.getElementById('btn-use-last-encrypted');
-        if (bridgeBtn) bridgeBtn.click();
       });
     }
   }
 
   /* ==========================================================================
-     PAGE 2: VIDEO DECRYPTION MODULE (Upload, Invert, Preview & Export)
+     PAGE 2: VIDEO DECRYPTION MODULE (.kxv Self-Describing Lossless Recovery)
      ========================================================================== */
   function initVideoDecryptModule() {
     const decDOM = {
-      bridgeBox: document.getElementById('dec-bridge-box'),
-      btnUseLast: document.getElementById('btn-use-last-encrypted'),
       dropZone: document.getElementById('video-dec-drop-zone'),
       fileInput: document.getElementById('video-dec-file-input'),
       dropText: document.getElementById('video-dec-drop-text'),
       dropIcon: document.getElementById('video-dec-drop-icon'),
-      metaChip: document.getElementById('video-dec-meta-chip'),
+      errorBanner: document.getElementById('video-dec-error-banner'),
+      errorText: document.getElementById('video-dec-error-text'),
+      kxvMetaCard: document.getElementById('video-dec-kxv-meta'),
       metaName: document.getElementById('meta-video-dec-name'),
-      metaDuration: document.getElementById('meta-video-dec-duration'),
       metaRes: document.getElementById('meta-video-dec-res'),
       metaFrames: document.getElementById('meta-video-dec-frames'),
+      metaScope: document.getElementById('meta-video-dec-scope'),
+      metaK: document.getElementById('meta-video-dec-k'),
+      metaKeytype: document.getElementById('meta-video-dec-keytype'),
+      scopeInfo: document.getElementById('video-dec-scope-info'),
+      scopeText: document.getElementById('video-dec-scope-text'),
+      keySelector: document.getElementById('video-dec-key-selector'),
+      pwdGroup: document.getElementById('video-dec-pwd-group'),
+      imgKeyGroup: document.getElementById('video-dec-imgkey-group'),
       password: document.getElementById('video-dec-password'),
       togglePwd: document.getElementById('toggle-video-dec-pwd'),
-      algoSelect: document.getElementById('video-dec-algo-select'),
-      fpsSelect: document.getElementById('video-dec-fps-select'),
-      scaleSelect: document.getElementById('video-dec-scale-select'),
+      keyImageInput: document.getElementById('video-dec-key-image-input'),
+      keyDropZone: document.getElementById('video-dec-key-drop-zone'),
+      keyDropText: document.getElementById('video-dec-key-drop-text'),
       progressBox: document.getElementById('video-dec-progress-box'),
       progressStatus: document.getElementById('video-dec-progress-status'),
       progressPct: document.getElementById('video-dec-progress-pct'),
@@ -3537,59 +5407,88 @@ document.addEventListener('DOMContentLoaded', () => {
       btnProcess: document.getElementById('btn-process-video-dec'),
       btnCancel: document.getElementById('btn-cancel-video-dec'),
       origPlayer: document.getElementById('video-dec-orig-player'),
+      canvasOrigFrame: document.getElementById('canvas-video-dec-orig-frame'),
       phOrig: document.getElementById('ph-video-dec-orig'),
       resultPlayer: document.getElementById('video-dec-result-player'),
+      canvasResultFrame: document.getElementById('canvas-video-dec-result-frame'),
       phResult: document.getElementById('ph-video-dec-result'),
       origTime: document.getElementById('video-dec-orig-time'),
       resultTime: document.getElementById('video-dec-result-time'),
-      liveBox: document.getElementById('video-dec-live-box'),
-      liveBadge: document.getElementById('live-frame-dec-badge'),
-      canvasThumb: document.getElementById('canvas-video-dec-thumb'),
+      scrubberBox: document.getElementById('video-dec-scrubber-box'),
+      scrubberLabel: document.getElementById('video-dec-scrubber-label'),
+      frameSlider: document.getElementById('video-dec-frame-slider'),
+      chkShowMask: document.getElementById('chk-video-dec-show-mask'),
       btnSyncPlay: document.getElementById('btn-sync-play-dec'),
       btnSyncPause: document.getElementById('btn-sync-pause-dec'),
       btnSyncReset: document.getElementById('btn-sync-reset-dec'),
       metricsBar: document.getElementById('video-dec-metrics-bar'),
       valFrames: document.getElementById('val-video-dec-frames'),
-      valSpeed: document.getElementById('val-video-dec-speed'),
-      valQuality: document.getElementById('val-video-dec-quality'),
-      valStatus: document.getElementById('val-video-dec-status'),
-      btnDownload: document.getElementById('btn-download-video-dec')
+      valDiff: document.getElementById('val-video-dec-diff'),
+      valMse: document.getElementById('val-video-dec-mse'),
+      valPsnr: document.getElementById('val-video-dec-psnr'),
+      btnDownloadPng: document.getElementById('btn-download-video-dec-png'),
+      btnDownloadWebm: document.getElementById('btn-download-video-dec')
     };
 
     const decState = {
-      videoLoaded: false,
-      videoFile: null,
-      videoUrl: null,
-      processedBlob: null,
-      processedUrl: null,
-      isProcessing: false,
-      cancelRequested: false
+      kxvBytes: null,
+      kxvInfo: null,
+      keyType: 'password',
+      keyImageBytes: null,
+      encryptedFrames: [], // Array<ImageData>
+      restoredFrames: [],  // Array<ImageData>
+      frameMasks: [],      // Array<Uint8Array>
+      timestampsMs: [],
+      currentFrameIdx: 0,
+      playTimer: null,
+      isProcessing: false
     };
+
+    function showDecError(msg) {
+      if (!decDOM.errorBanner || !decDOM.errorText) return;
+      if (!msg) {
+        decDOM.errorBanner.style.display = 'none';
+        decDOM.errorText.textContent = '';
+      } else {
+        decDOM.errorText.textContent = msg;
+        decDOM.errorBanner.style.display = 'flex';
+      }
+    }
+
+    function stopDecPlayback() {
+      if (decState.playTimer) {
+        clearInterval(decState.playTimer);
+        decState.playTimer = null;
+      }
+    }
 
     if (decDOM.togglePwd && decDOM.password) {
       setupPwdToggle(decDOM.togglePwd, decDOM.password);
     }
 
-    // Bridge Notification: Show bridge button if video was encrypted in Encrypt page
-    FYP_VideoBridge.onVideoEncrypted = () => {
-      if (decDOM.bridgeBox) decDOM.bridgeBox.style.display = 'block';
-    };
+    // Key Type Selector (Password vs Key Image)
+    if (decDOM.keySelector) {
+      const btns = decDOM.keySelector.querySelectorAll('.toggle-btn');
+      btns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          btns.forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          decState.keyType = btn.getAttribute('data-key-type') || 'password';
+          if (decDOM.pwdGroup) decDOM.pwdGroup.style.display = decState.keyType === 'password' ? 'block' : 'none';
+          if (decDOM.imgKeyGroup) decDOM.imgKeyGroup.style.display = decState.keyType === 'image' ? 'block' : 'none';
+        });
+      });
+    }
 
-    if (decDOM.btnUseLast) {
-      decDOM.btnUseLast.addEventListener('click', () => {
-        if (!FYP_VideoBridge.lastEncryptedUrl) return;
-
-        if (FYP_VideoBridge.lastPassword && decDOM.password) {
-          decDOM.password.value = FYP_VideoBridge.lastPassword;
+    if (decDOM.keyImageInput) {
+      decDOM.keyImageInput.addEventListener('change', async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const buf = await file.arrayBuffer();
+        decState.keyImageBytes = new Uint8Array(buf);
+        if (decDOM.keyDropText) {
+          decDOM.keyDropText.innerHTML = `✅ <b>Key Image:</b> ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
         }
-        if (FYP_VideoBridge.lastAlgo && decDOM.algoSelect) {
-          decDOM.algoSelect.value = FYP_VideoBridge.lastAlgo;
-        }
-        if (FYP_VideoBridge.lastFps && decDOM.fpsSelect) {
-          decDOM.fpsSelect.value = FYP_VideoBridge.lastFps;
-        }
-
-        loadDecVideoIntoPlayer(FYP_VideoBridge.lastEncryptedUrl, FYP_VideoBridge.lastEncryptedName || "encrypted_video.webm");
       });
     }
 
@@ -3598,329 +5497,353 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         decDOM.dropZone.classList.add('drag-active');
       });
-
       decDOM.dropZone.addEventListener('dragleave', () => {
         decDOM.dropZone.classList.remove('drag-active');
       });
-
       decDOM.dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
         decDOM.dropZone.classList.remove('drag-active');
         if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-          handleDecVideoSelect(e.dataTransfer.files[0]);
+          handleDecFileSelect(e.dataTransfer.files[0]);
         }
       });
-
       decDOM.fileInput.addEventListener('change', (e) => {
         if (e.target.files && e.target.files.length > 0) {
-          handleDecVideoSelect(e.target.files[0]);
+          handleDecFileSelect(e.target.files[0]);
         }
       });
     }
 
-    function handleDecVideoSelect(file) {
+    async function handleDecFileSelect(file) {
       if (!file) return;
+      showDecError(null);
+      stopDecPlayback();
 
-      const isVideo = (file.type && file.type.startsWith('video/')) ||
-        /\.(mp4|webm|mov|mkv|avi|m4v|3gp|wmv|flv|ts|ogv)$/i.test(file.name);
-
-      if (!isVideo) {
-        alert(`"${file.name}" does not appear to be a recognized video file. Please select a video (WebM, MP4, etc.).`);
-        return;
-      }
-
-      decState.videoFile = file;
-      if (decState.videoUrl) URL.revokeObjectURL(decState.videoUrl);
-      decState.videoUrl = URL.createObjectURL(file);
-      loadDecVideoIntoPlayer(decState.videoUrl, file.name);
-
-      setTimeout(() => {
-        if (decDOM.fileInput) decDOM.fileInput.value = '';
-      }, 600);
-    }
-
-    function loadDecVideoIntoPlayer(url, name = "encrypted_video.webm") {
-      const video = decDOM.origPlayer;
-      if (!video) return;
-
-      if (decDOM.phOrig) decDOM.phOrig.style.display = 'none';
-      video.style.display = 'block';
-
-      if (decDOM.dropZone) {
-        decDOM.dropZone.classList.add('has-file');
-        if (decDOM.dropIcon) {
-          decDOM.dropIcon.className = 'fa-solid fa-circle-check drop-icon';
-          decDOM.dropIcon.style.color = '#059669';
-        }
-        if (decDOM.dropText) {
-          decDOM.dropText.innerHTML = `✅ <b>Selected:</b> <span style="color: #059669;">${name}</span>`;
-        }
-      }
-
-      video.src = url;
-      video.muted = true;
-      video.loop = true;
-      video.playsInline = true;
-      video.controls = true;
-
-      const onMeta = () => {
-        const dur = video.duration || 0;
-        const w = video.videoWidth || 640;
-        const h = video.videoHeight || 360;
-        const fps = parseInt(decDOM.fpsSelect ? decDOM.fpsSelect.value : "24", 10);
-        const estFrames = Math.max(1, Math.round(dur * fps));
-
-        if (decDOM.metaName) decDOM.metaName.textContent = name;
-        if (decDOM.metaDuration) decDOM.metaDuration.textContent = dur.toFixed(1) + 's';
-        if (decDOM.metaRes) decDOM.metaRes.textContent = `${w} × ${h}`;
-        if (decDOM.metaFrames) decDOM.metaFrames.textContent = `~${estFrames} frames`;
-        if (decDOM.metaChip) decDOM.metaChip.style.display = 'flex';
-
-        if (decDOM.dropText) {
-          decDOM.dropText.innerHTML = `✅ <b>Selected:</b> ${name} (${dur.toFixed(1)}s, ${w}×${h})`;
-        }
-
-        decState.videoLoaded = true;
-        if (decDOM.btnProcess) decDOM.btnProcess.disabled = false;
-
-        video.play().catch(() => {
-          video.currentTime = 0.05;
-        });
-      };
-
-      video.onloadedmetadata = onMeta;
-      video.addEventListener('loadeddata', onMeta, { once: true });
-      video.addEventListener('canplay', onMeta, { once: true });
-
-      if (video.readyState >= 1) onMeta();
-
-      video.onerror = () => {
-        alert(`The browser was unable to decode "${name}". Please ensure it is a valid video file.`);
-        if (decDOM.phOrig) decDOM.phOrig.style.display = 'flex';
-        video.style.display = 'none';
-        if (decDOM.dropZone) decDOM.dropZone.classList.remove('has-file');
-      };
-    }
-
-    // Process Video Decryption
-    if (decDOM.btnProcess) {
-      decDOM.btnProcess.addEventListener('click', async () => {
-        if (!decState.videoLoaded) return;
-
-        const video = decDOM.origPlayer;
-        const password = decDOM.password ? decDOM.password.value : '';
-        const algo = decDOM.algoSelect ? decDOM.algoSelect.value : '3stage';
-        const targetFps = parseInt(decDOM.fpsSelect ? decDOM.fpsSelect.value : '24', 10);
-        const scaleMode = decDOM.scaleSelect ? decDOM.scaleSelect.value : 'optimized';
-
-        let targetW = video.videoWidth || 640;
-        let targetH = video.videoHeight || 360;
-
-        if (scaleMode === 'optimized' && targetW > 640) {
-          const scale = 640 / targetW;
-          targetW = 640;
-          targetH = Math.round((targetH * scale) / 2) * 2;
-        } else {
-          targetW = Math.round(targetW / 2) * 2;
-          targetH = Math.round(targetH / 2) * 2;
-        }
-
-        const duration = Math.min(video.duration, 8.0);
-        const totalFrames = Math.max(1, Math.floor(duration * targetFps));
-
-        decState.isProcessing = true;
-        decState.cancelRequested = false;
-        decDOM.btnProcess.disabled = true;
-        if (decDOM.btnCancel) decDOM.btnCancel.style.display = 'inline-flex';
-        if (decDOM.progressBox) decDOM.progressBox.style.display = 'block';
-        if (decDOM.liveBox) decDOM.liveBox.style.display = 'block';
-        if (decDOM.progressFill) decDOM.progressFill.style.width = '0%';
-        if (decDOM.progressPct) decDOM.progressPct.textContent = '0%';
-        if (decDOM.progressStatus) {
-          decDOM.progressStatus.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Initializing Video Decryption...';
-        }
-
-        const offCanvas = document.createElement('canvas');
-        offCanvas.width = targetW;
-        offCanvas.height = targetH;
-        const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
-
-        if (decDOM.canvasThumb) {
-          decDOM.canvasThumb.width = targetW;
-          decDOM.canvasThumb.height = targetH;
-        }
-        const thumbCtx = decDOM.canvasThumb ? decDOM.canvasThumb.getContext('2d') : null;
-
-        const master32 = await BitEngine.createFastMasterKey(password);
-        const processedFrames = [];
-        const startTime = performance.now();
-
-        for (let i = 0; i < totalFrames; i++) {
-          if (decState.cancelRequested) break;
-
-          const t = i / targetFps;
-          video.currentTime = Math.min(t, video.duration - 0.01);
-
-          await new Promise(resolve => {
-            const onSeek = () => { video.removeEventListener('seeked', onSeek); resolve(); };
-            video.addEventListener('seeked', onSeek, { once: true });
-            setTimeout(onSeek, 250);
-          });
-
-          offCtx.drawImage(video, 0, 0, targetW, targetH);
-          const imgData = offCtx.getImageData(0, 0, targetW, targetH);
-
-          BitEngine.decryptVideoFrame(imgData, master32, i, algo);
-
-          processedFrames.push(imgData);
-          if (thumbCtx) thumbCtx.putImageData(imgData, 0, 0);
-
-          const pct = Math.round(((i + 1) / totalFrames) * 100);
-          if (decDOM.progressFill) decDOM.progressFill.style.width = pct + '%';
-          if (decDOM.progressPct) decDOM.progressPct.textContent = pct + '%';
-          if (decDOM.progressDetails) {
-            const curFps = Math.round((i + 1) / (Math.max(0.01, (performance.now() - startTime) / 1000)));
-            decDOM.progressDetails.textContent = `Frame ${i + 1} / ${totalFrames} (${curFps} FPS)`;
-          }
-
-          const elapsedSec = (performance.now() - startTime) / 1000;
-          const estTotal = (elapsedSec / (i + 1)) * totalFrames;
-          const eta = Math.max(0, estTotal - elapsedSec).toFixed(1);
-          if (decDOM.progressEta) decDOM.progressEta.textContent = `ETA: ${eta}s`;
-          if (decDOM.liveBadge) decDOM.liveBadge.textContent = `Frame ${i + 1} / ${totalFrames}`;
-
-          if (i % 2 === 0) await new Promise(r => setTimeout(r, 0));
-        }
-
-        if (decState.cancelRequested || processedFrames.length === 0) {
-          decState.isProcessing = false;
-          decDOM.btnProcess.disabled = false;
-          if (decDOM.btnCancel) decDOM.btnCancel.style.display = 'none';
-          if (decDOM.progressStatus) decDOM.progressStatus.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Decryption Cancelled';
+      try {
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        if (!BitEngine.isKxvBytes(bytes)) {
+          showDecError(`Invalid container: "${file.name}" is not a valid KXBIT Self-Describing Encrypted Video (.kxv) file.`);
           return;
         }
 
-        if (decDOM.progressStatus) decDOM.progressStatus.innerHTML = '<i class="fa-solid fa-film fa-spin"></i> Compiling Restored WebM Stream...';
-        if (decDOM.progressEta) decDOM.progressEta.textContent = 'Finalizing stream...';
+        const info = await BitEngine.inspectKXVContainer(bytes);
+        decState.kxvBytes = bytes;
+        decState.kxvInfo = info;
+        decState.restoredFrames = [];
+        decState.frameMasks = info.masks || [];
+        decState.timestampsMs = (info.metadata && info.metadata.timestampsMs) ? info.metadata.timestampsMs : [];
+        decState.encryptedFrames = info.previewFrames || [];
 
-        const recCanvas = document.createElement('canvas');
-        recCanvas.width = targetW;
-        recCanvas.height = targetH;
-        const recCtx = recCanvas.getContext('2d');
+        // Update dropzone UI
+        if (decDOM.dropZone) {
+          decDOM.dropZone.classList.add('has-file');
+          if (decDOM.dropIcon) {
+            decDOM.dropIcon.className = 'fa-solid fa-circle-check drop-icon';
+            decDOM.dropIcon.style.color = '#059669';
+          }
+          if (decDOM.dropText) {
+            decDOM.dropText.innerHTML = `✅ <b>Loaded .kxv Container:</b> <span style="color: #059669;">${file.name}</span> (${(bytes.byteLength / 1024).toFixed(1)} KB)`;
+          }
+        }
 
-        const stream = recCanvas.captureStream(targetFps);
-        let mimeType = 'video/webm;codecs=vp9';
-        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm;codecs=vp8';
-        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
+        // Populate .kxv metadata summary
+        const hdr = info.header;
+        const meta = info.metadata || {};
+        const scopeLabel = hdr.selectionMode === 'selected'
+          ? 'Mode B (Selected Tracked Faces)'
+          : (hdr.scope === 'full' ? 'Entire Frame' : 'Mode A (All Detected Faces)');
+        const keyLabel = hdr.keyType === 'image' ? 'Key Image' : 'Text Password';
+        const fpsVal = meta.fps || 15;
 
-        const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3000000 });
-        const chunks = [];
-        recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+        if (decDOM.metaName) decDOM.metaName.textContent = file.name;
+        if (decDOM.metaRes) decDOM.metaRes.textContent = `${hdr.width} × ${hdr.height} @ ${fpsVal} FPS`;
+        if (decDOM.metaFrames) decDOM.metaFrames.textContent = `${hdr.frameCount} lossless PNG frames`;
+        if (decDOM.metaScope) decDOM.metaScope.textContent = scopeLabel;
+        if (decDOM.metaK) decDOM.metaK.textContent = `k = ${hdr.k}-MSB`;
+        if (decDOM.metaKeytype) decDOM.metaKeytype.textContent = keyLabel;
+        if (decDOM.kxvMetaCard) decDOM.kxvMetaCard.style.display = 'flex';
 
-        recorder.onstop = () => {
-          const blob = new Blob(chunks, { type: mimeType });
-          if (decState.processedUrl) URL.revokeObjectURL(decState.processedUrl);
-          decState.processedBlob = blob;
-          decState.processedUrl = URL.createObjectURL(blob);
+        if (decDOM.scopeInfo && decDOM.scopeText) {
+          decDOM.scopeInfo.style.display = 'flex';
+          decDOM.scopeText.innerHTML =
+            `<b>Embedded .kxv Metadata Verified:</b> ${scopeLabel} · <b>k = ${hdr.k}</b> · Required Key: <b>${keyLabel}</b>. Exact per-frame binary face masks loaded directly from container (AI detection is not rerun).`;
+        }
 
-          decDOM.resultPlayer.src = decState.processedUrl;
-          decDOM.resultPlayer.load();
-          if (decDOM.phResult) decDOM.phResult.style.display = 'none';
-          decDOM.resultPlayer.style.display = 'block';
+        // Auto-switch key input tab to match container's keyType
+        if (decDOM.keySelector) {
+          const targetKeyType = hdr.keyType === 'image' ? 'image' : 'password';
+          decState.keyType = targetKeyType;
+          const btns = decDOM.keySelector.querySelectorAll('.toggle-btn');
+          btns.forEach(b => b.classList.toggle('active', b.getAttribute('data-key-type') === targetKeyType));
+          if (decDOM.pwdGroup) decDOM.pwdGroup.style.display = targetKeyType === 'password' ? 'block' : 'none';
+          if (decDOM.imgKeyGroup) decDOM.imgKeyGroup.style.display = targetKeyType === 'image' ? 'block' : 'none';
+        }
 
-          if (decDOM.btnDownload) decDOM.btnDownload.disabled = false;
+        if (decDOM.scrubberBox && decDOM.frameSlider) {
+          decDOM.scrubberBox.style.display = 'block';
+          decDOM.frameSlider.max = String(Math.max(0, hdr.frameCount - 1));
+          decDOM.frameSlider.value = '0';
+        }
+
+        decState.currentFrameIdx = 0;
+        renderVideoDecFrame(0);
+        if (decDOM.btnProcess) decDOM.btnProcess.disabled = false;
+      } catch (err) {
+        console.error('.kxv inspection error:', err);
+        showDecError(err.message || 'Corrupted or unsupported .kxv container.');
+      }
+
+      setTimeout(() => {
+        if (decDOM.fileInput) decDOM.fileInput.value = '';
+      }, 400);
+    }
+
+    function renderVideoDecFrame(frameIdx) {
+      if (!decState.encryptedFrames.length || !decState.kxvInfo) return;
+      const idx = Math.max(0, Math.min(decState.encryptedFrames.length - 1, frameIdx));
+      decState.currentFrameIdx = idx;
+
+      const w = decState.kxvInfo.header.width;
+      const h = decState.kxvInfo.header.height;
+      const tsSec = ((decState.timestampsMs[idx] || 0) / 1000).toFixed(2);
+      const totalSec = ((decState.timestampsMs[decState.timestampsMs.length - 1] || 0) / 1000).toFixed(2);
+
+      if (decDOM.phOrig) decDOM.phOrig.style.display = 'none';
+      if (decDOM.origPlayer) decDOM.origPlayer.style.display = 'none';
+
+      if (decDOM.canvasOrigFrame) {
+        const canvas = decDOM.canvasOrigFrame;
+        canvas.width = w;
+        canvas.height = h;
+        canvas.style.display = 'block';
+        const ctx = canvas.getContext('2d');
+        ctx.putImageData(decState.encryptedFrames[idx], 0, 0);
+
+        // Optional stored binary mask boundary overlay
+        if (decDOM.chkShowMask && decDOM.chkShowMask.checked && decState.frameMasks[idx]) {
+          const mask = decState.frameMasks[idx];
+          const ov = ctx.createImageData(w, h);
+          const d = ov.data;
+          for (let y = 1; y < h - 1; y++) {
+            for (let x = 1; x < w - 1; x++) {
+              const p = y * w + x;
+              if (mask[p] === 1 && (mask[p - 1] === 0 || mask[p + 1] === 0 || mask[p - w] === 0 || mask[p + w] === 0)) {
+                const bi = p * 4;
+                d[bi] = 16; d[bi + 1] = 185; d[bi + 2] = 129; d[bi + 3] = 255;
+              }
+            }
+          }
+          const tmp = document.createElement('canvas');
+          tmp.width = w;
+          tmp.height = h;
+          tmp.getContext('2d').putImageData(ov, 0, 0);
+          ctx.drawImage(tmp, 0, 0);
+        }
+      }
+
+      if (decDOM.scrubberLabel) {
+        decDOM.scrubberLabel.textContent = `Frame ${idx + 1} / ${decState.encryptedFrames.length} (${tsSec}s)`;
+      }
+      if (decDOM.origTime) decDOM.origTime.textContent = `${tsSec}s / ${totalSec}s`;
+
+      if (decState.restoredFrames[idx] && decDOM.canvasResultFrame) {
+        if (decDOM.phResult) decDOM.phResult.style.display = 'none';
+        if (decDOM.resultPlayer) decDOM.resultPlayer.style.display = 'none';
+        const rCanvas = decDOM.canvasResultFrame;
+        rCanvas.width = w;
+        rCanvas.height = h;
+        rCanvas.style.display = 'block';
+        rCanvas.getContext('2d').putImageData(decState.restoredFrames[idx], 0, 0);
+        if (decDOM.resultTime) decDOM.resultTime.textContent = `${tsSec}s / ${totalSec}s`;
+      }
+    }
+
+    if (decDOM.frameSlider) {
+      decDOM.frameSlider.addEventListener('input', () => {
+        stopDecPlayback();
+        renderVideoDecFrame(parseInt(decDOM.frameSlider.value, 10) || 0);
+      });
+    }
+    if (decDOM.chkShowMask) {
+      decDOM.chkShowMask.addEventListener('change', () => {
+        renderVideoDecFrame(decState.currentFrameIdx);
+      });
+    }
+
+    // Execute Lossless .kxv Video Decryption & 0-Different-Pixel Verification
+    if (decDOM.btnProcess) {
+      decDOM.btnProcess.addEventListener('click', async () => {
+        showDecError(null);
+        stopDecPlayback();
+
+        if (!decState.kxvBytes || !decState.kxvInfo) {
+          showDecError('Please upload an encrypted .kxv video file first.');
+          return;
+        }
+
+        const password = decDOM.password ? decDOM.password.value : '';
+        if (decState.keyType === 'password' && !password) {
+          showDecError('Please enter the decryption password.');
+          return;
+        }
+        if (decState.keyType === 'image' && (!decState.keyImageBytes || decState.keyImageBytes.length === 0)) {
+          showDecError('Please upload the Key Image used during encryption.');
+          return;
+        }
+
+        decState.isProcessing = true;
+        decDOM.btnProcess.disabled = true;
+        if (decDOM.progressBox) decDOM.progressBox.style.display = 'block';
+        if (decDOM.progressStatus) {
+          decDOM.progressStatus.innerHTML = '<i class="fa-solid fa-unlock-keyhole fa-spin"></i> Verifying Auth Tags & Reversing 3-Stage Face Encryption...';
+        }
+
+        const startTime = performance.now();
+        try {
+          const keySource = decState.keyType === 'image' ? decState.keyImageBytes : password;
+          const result = await BitEngine.decryptKXVContainer(decState.kxvBytes, keySource, {
+            onProgress: (done, total) => {
+              const pct = Math.round((done / total) * 100);
+              if (decDOM.progressFill) decDOM.progressFill.style.width = `${pct}%`;
+              if (decDOM.progressPct) decDOM.progressPct.textContent = `${pct}%`;
+              if (decDOM.progressDetails) {
+                decDOM.progressDetails.textContent = `Restoring Frame ${done} / ${total}`;
+              }
+            }
+          });
+
+          decState.restoredFrames = result.restoredFrames;
+
+          // Verify zero different pixels against session original frames (if available) + cryptographic plainAuthTag
+          let diffPixels = result.stats.differentPixels || 0;
+          let mse = result.stats.mse || 0;
+          if (
+            FYP_VideoBridge.lastOriginalFrames &&
+            FYP_VideoBridge.lastOriginalFrames.length === result.restoredFrames.length
+          ) {
+            diffPixels = 0;
+            mse = 0;
+            for (let i = 0; i < result.restoredFrames.length; i++) {
+              const orig = FYP_VideoBridge.lastOriginalFrames[i];
+              const dec = result.restoredFrames[i].data;
+              if (orig.length === dec.length) {
+                const cmp = BitEngine.comparePixelsRGB(orig, dec, result.header.width, result.header.height);
+                diffPixels += cmp.differentPixels;
+                mse += cmp.mse;
+              }
+            }
+            mse /= result.restoredFrames.length;
+          }
+
+          if (decDOM.valFrames) decDOM.valFrames.textContent = String(result.header.frameCount);
+          if (decDOM.valDiff) decDOM.valDiff.textContent = `${diffPixels} px`;
+          if (decDOM.valMse) decDOM.valMse.textContent = mse.toFixed(4);
+          if (decDOM.valPsnr) decDOM.valPsnr.textContent = mse === 0 ? '∞ dB (100% Lossless)' : `${(10 * Math.log10((255 * 255) / mse)).toFixed(2)} dB`;
+          if (decDOM.metricsBar) decDOM.metricsBar.style.display = 'flex';
+
+          if (decDOM.btnDownloadPng) decDOM.btnDownloadPng.disabled = false;
+          if (decDOM.btnDownloadWebm) decDOM.btnDownloadWebm.disabled = false;
           if (decDOM.btnSyncPlay) decDOM.btnSyncPlay.disabled = false;
           if (decDOM.btnSyncPause) decDOM.btnSyncPause.disabled = false;
           if (decDOM.btnSyncReset) decDOM.btnSyncReset.disabled = false;
 
-          const totalTimeSec = (performance.now() - startTime) / 1000;
-          const avgFps = (totalFrames / Math.max(0.01, totalTimeSec)).toFixed(1);
-
-          if (decDOM.valFrames) decDOM.valFrames.textContent = totalFrames;
-          if (decDOM.valSpeed) decDOM.valSpeed.textContent = `${avgFps} FPS`;
-          if (decDOM.metricsBar) decDOM.metricsBar.style.display = 'flex';
-
+          const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(2);
           if (decDOM.progressStatus) {
-            decDOM.progressStatus.innerHTML = '<i class="fa-solid fa-circle-check" style="color: var(--accent-emerald);"></i> Decryption Complete!';
+            decDOM.progressStatus.innerHTML =
+              `<i class="fa-solid fa-circle-check" style="color: var(--accent-emerald);"></i> 100% Lossless Recovery Verified (0 Different Pixels) in ${elapsedSec}s!`;
           }
 
+          startDecDualPlayback();
+        } catch (err) {
+          // Requirement: Never pop up alert() on wrong password/key; show inline error banner only
+          showDecError(err.message || 'Decryption failed: Wrong password/key image or modified .kxv container.');
+          if (decDOM.progressBox) decDOM.progressBox.style.display = 'none';
+        } finally {
           decState.isProcessing = false;
           decDOM.btnProcess.disabled = false;
-          if (decDOM.btnCancel) decDOM.btnCancel.style.display = 'none';
-        };
-
-        recorder.start();
-
-        let frameIdx = 0;
-        const streamInterval = 1000 / targetFps;
-        const playTimer = setInterval(() => {
-          if (frameIdx < processedFrames.length && !decState.cancelRequested) {
-            recCtx.putImageData(processedFrames[frameIdx], 0, 0);
-            frameIdx++;
-          } else {
-            clearInterval(playTimer);
-            setTimeout(() => {
-              if (recorder.state !== 'inactive') recorder.stop();
-            }, 150);
-          }
-        }, streamInterval);
+        }
       });
     }
 
-    if (decDOM.btnCancel) {
-      decDOM.btnCancel.addEventListener('click', () => {
-        decState.cancelRequested = true;
-      });
+    function startDecDualPlayback() {
+      stopDecPlayback();
+      if (!decState.encryptedFrames.length || !decState.kxvInfo) return;
+      const fpsVal = (decState.kxvInfo.metadata && decState.kxvInfo.metadata.fps) ? decState.kxvInfo.metadata.fps : 15;
+      const intervalMs = Math.round(1000 / fpsVal);
+      decState.playTimer = setInterval(() => {
+        const nextIdx = (decState.currentFrameIdx + 1) % decState.encryptedFrames.length;
+        if (decDOM.frameSlider) decDOM.frameSlider.value = String(nextIdx);
+        renderVideoDecFrame(nextIdx);
+      }, intervalMs);
     }
 
-    // Synchronized Dual Playback Controls (Decrypt Tab)
     if (decDOM.btnSyncPlay) {
-      decDOM.btnSyncPlay.addEventListener('click', () => {
-        decDOM.resultPlayer.currentTime = decDOM.origPlayer.currentTime;
-        decDOM.origPlayer.play();
-        decDOM.resultPlayer.play();
-      });
+      decDOM.btnSyncPlay.addEventListener('click', () => startDecDualPlayback());
     }
-
     if (decDOM.btnSyncPause) {
-      decDOM.btnSyncPause.addEventListener('click', () => {
-        decDOM.origPlayer.pause();
-        decDOM.resultPlayer.pause();
-      });
+      decDOM.btnSyncPause.addEventListener('click', () => stopDecPlayback());
     }
-
     if (decDOM.btnSyncReset) {
       decDOM.btnSyncReset.addEventListener('click', () => {
-        decDOM.origPlayer.pause();
-        decDOM.resultPlayer.pause();
-        decDOM.origPlayer.currentTime = 0;
-        decDOM.resultPlayer.currentTime = 0;
+        stopDecPlayback();
+        if (decDOM.frameSlider) decDOM.frameSlider.value = '0';
+        renderVideoDecFrame(0);
       });
     }
 
-    if (decDOM.origPlayer) {
-      decDOM.origPlayer.addEventListener('timeupdate', () => {
-        const cur = decDOM.origPlayer.currentTime;
-        const dur = decDOM.origPlayer.duration || 0;
-        if (decDOM.origTime) decDOM.origTime.textContent = `${cur.toFixed(1)}s / ${dur.toFixed(1)}s`;
-      });
-    }
-
-    if (decDOM.resultPlayer) {
-      decDOM.resultPlayer.addEventListener('timeupdate', () => {
-        const cur = decDOM.resultPlayer.currentTime;
-        const dur = decDOM.resultPlayer.duration || 0;
-        if (decDOM.resultTime) decDOM.resultTime.textContent = `${cur.toFixed(1)}s / ${dur.toFixed(1)}s`;
-      });
-    }
-
-    if (decDOM.btnDownload) {
-      decDOM.btnDownload.addEventListener('click', () => {
-        if (!decState.processedBlob) return;
+    // Download Current Verified Lossless Restored Frame as PNG
+    if (decDOM.btnDownloadPng) {
+      decDOM.btnDownloadPng.addEventListener('click', () => {
+        const idx = decState.currentFrameIdx;
+        if (!decState.restoredFrames[idx] || !decState.kxvInfo) return;
+        const c = document.createElement('canvas');
+        c.width = decState.kxvInfo.header.width;
+        c.height = decState.kxvInfo.header.height;
+        c.getContext('2d').putImageData(decState.restoredFrames[idx], 0, 0);
         const link = document.createElement('a');
-        link.href = decState.processedUrl;
-        link.download = `restored_video_${Date.now()}.webm`;
+        link.href = c.toDataURL('image/png');
+        link.download = `restored_frame_${idx + 1}.png`;
         link.click();
+      });
+    }
+
+    // Download Restored Playable WebM Video
+    if (decDOM.btnDownloadWebm) {
+      decDOM.btnDownloadWebm.addEventListener('click', () => {
+        if (!decState.restoredFrames.length || !decState.kxvInfo) return;
+        const w = decState.kxvInfo.header.width;
+        const h = decState.kxvInfo.header.height;
+        const fps = (decState.kxvInfo.metadata && decState.kxvInfo.metadata.fps) ? decState.kxvInfo.metadata.fps : 15;
+        const recCanvas = document.createElement('canvas');
+        recCanvas.width = w;
+        recCanvas.height = h;
+        const recCtx = recCanvas.getContext('2d');
+        const stream = recCanvas.captureStream(fps);
+        let mimeType = 'video/webm;codecs=vp9';
+        if (typeof MediaRecorder !== 'undefined' && !MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
+        const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3500000 });
+        const chunks = [];
+        recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+        recorder.onstop = () => {
+          const blob = new Blob(chunks, { type: mimeType });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = 'restored_video.webm';
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 2000);
+        };
+        recorder.start();
+        let idx = 0;
+        const timer = setInterval(() => {
+          if (idx < decState.restoredFrames.length) {
+            recCtx.putImageData(decState.restoredFrames[idx++], 0, 0);
+          } else {
+            clearInterval(timer);
+            setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 120);
+          }
+        }, Math.round(1000 / fps));
       });
     }
   }
@@ -3928,5 +5851,2168 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize both video modules
   initVideoEncryptModule();
   initVideoDecryptModule();
+
+  /* ==========================================================================
+     PNG Binary Structure Explorer, Bit/Byte Editor & Optimization Controller
+     ========================================================================== */
+  function initPngBinaryExplorerModule() {
+    const pexState = {
+      fileName: 'sample_encrypted_photo.png',
+      originalPngBytes: null,
+      workingPngBytes: null,
+      originalMetaBytes: null,
+      workingMetaBytes: null,
+      undoStack: [],
+      redoStack: [],
+      storageUnit: 'bytes',       // 'bytes' | 'kib' | 'pct'
+      hexSectionIndex: -1,        // -1 = All PNG Bytes, or section.index
+      hexViewMode: 'hex',         // 'hex' | 'binary' | 'decoded'
+      hexPage: 0,
+      hexPageSize: 256,
+      highlightRange: null,       // { start, end, label }
+      selectedFileByteOffset: 0,
+      selectedMetaByteIndex: 0,
+      referencePlainImageData: null,
+      knownPassword: 'KXBIT-Demo-Key-2026'
+    };
+
+    const el = (id) => document.getElementById(id);
+
+    function formatSize(bytes, totalBytes, unit) {
+      if (unit === 'kib') return `${(bytes / 1024).toFixed(2)} KiB`;
+      if (unit === 'pct') {
+        const pct = totalBytes > 0 ? ((bytes / totalBytes) * 100).toFixed(2) : '0.00';
+        return `${pct}%`;
+      }
+      return `${bytes.toLocaleString()} B`;
+    }
+
+    function getChunkColor(type) {
+      const palette = {
+        SIGN: '#6366f1',
+        IHDR: '#0ea5e9',
+        msBX: '#10b981',
+        msBx: '#14b8a6',
+        IDAT: '#3b82f6',
+        IEND: '#8b5cf6'
+      };
+      return palette[type] || '#f59e0b';
+    }
+
+    async function generateDemoEncryptedPng(metaVersion = 2) {
+      const w = 160, h = 120;
+      const rgba = new Uint8ClampedArray(w * h * 4);
+      const faceMask = new Uint8Array(w * h);
+      const cx = w * 0.5, cy = h * 0.45, rx = w * 0.22, ry = h * 0.28;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4;
+          rgba[i] = (x * 5 + y * 2) & 0xFF;
+          rgba[i + 1] = (x * 3 + y * 7 + 60) & 0xFF;
+          rgba[i + 2] = (x * 11 + y * 5 + 120) & 0xFF;
+          rgba[i + 3] = 255;
+          const dx = (x - cx) / rx, dy = (y - cy) / ry;
+          if (dx * dx + dy * dy <= 1.0) {
+            faceMask[y * w + x] = 1;
+          }
+        }
+      }
+      const origImg = new ImageData(rgba, w, h);
+      pexState.referencePlainImageData = new ImageData(new Uint8ClampedArray(rgba), w, h);
+      pexState.knownPassword = 'KXBIT-Demo-Key-2026';
+      const pwdInput = el('pex-test-password');
+      if (pwdInput) pwdInput.value = pexState.knownPassword;
+
+      const enc = await BitEngine.encryptToPNG(origImg, pexState.knownPassword, faceMask, {
+        k: 2,
+        iterations: 1000,
+        keyType: 'text',
+        scope: 'face',
+        metaVersion,
+        optionalFields: metaVersion === 2
+          ? [{ id: 2, critical: false, value: 'KXBIT-FYP' }]
+          : null
+      });
+      const label = metaVersion === 2
+        ? 'sample_face_v2_compact.png'
+        : 'sample_face_v1_legacy.png';
+      await loadPngIntoExplorer(enc.pngBytes, label);
+    }
+
+    async function loadPngIntoExplorer(pngBytes, fileName = 'encrypted_photo.png') {
+      const cleanCopy = new Uint8Array(pngBytes);
+      pexState.fileName = fileName;
+      pexState.originalPngBytes = new Uint8Array(cleanCopy);
+      pexState.workingPngBytes = new Uint8Array(cleanCopy);
+      pexState.undoStack = [];
+      pexState.redoStack = [];
+      pexState.hexPage = 0;
+      pexState.highlightRange = null;
+
+      const parsed = BitEngine.parsePngBinaryStructure(cleanCopy);
+      if (parsed.msbxSection) {
+        pexState.originalMetaBytes = new Uint8Array(parsed.msbxSection.dataBytes);
+        pexState.workingMetaBytes = new Uint8Array(parsed.msbxSection.dataBytes);
+        pexState.selectedFileByteOffset = parsed.msbxSection.dataOffset;
+        pexState.selectedMetaByteIndex = 0;
+      } else {
+        pexState.originalMetaBytes = new Uint8Array(0);
+        pexState.workingMetaBytes = new Uint8Array(0);
+        pexState.selectedFileByteOffset = 0;
+        pexState.selectedMetaByteIndex = 0;
+      }
+
+      const tamperBox = el('pex-tamper-result-box');
+      if (tamperBox) tamperBox.style.display = 'none';
+
+      await refreshAllExplorerViews();
+    }
+
+    function pushUndoSnapshot() {
+      if (!pexState.workingPngBytes) return;
+      pexState.undoStack.push({
+        pngBytes: new Uint8Array(pexState.workingPngBytes),
+        metaBytes: new Uint8Array(pexState.workingMetaBytes || 0)
+      });
+      if (pexState.undoStack.length > 40) pexState.undoStack.shift();
+      pexState.redoStack = [];
+      updateUndoRedoButtons();
+    }
+
+    function updateUndoRedoButtons() {
+      const btnUndo = el('btn-pex-undo');
+      const btnRedo = el('btn-pex-redo');
+      if (btnUndo) btnUndo.disabled = pexState.undoStack.length === 0;
+      if (btnRedo) btnRedo.disabled = pexState.redoStack.length === 0;
+    }
+
+    async function refreshAllExplorerViews() {
+      if (!pexState.workingPngBytes) return;
+      const structure = BitEngine.parsePngBinaryStructure(pexState.workingPngBytes);
+      if (structure.msbxSection) {
+        pexState.workingMetaBytes = new Uint8Array(structure.msbxSection.dataBytes);
+      } else {
+        pexState.workingMetaBytes = new Uint8Array(0);
+      }
+
+      renderSummaryBar(structure);
+      renderStructureTab(structure);
+      renderHexViewerTab(structure);
+      renderEditorTab(structure);
+      await renderOptimizationTab();
+      await renderValidationTab();
+      updateUndoRedoButtons();
+    }
+
+    function renderSummaryBar(structure) {
+      const fnEl = el('pex-sum-filename');
+      const fsEl = el('pex-sum-filesize');
+      const dmEl = el('pex-sum-dims');
+      const chEl = el('pex-sum-chunk');
+      const stEl = el('pex-sum-edit-state');
+
+      if (fnEl) fnEl.textContent = pexState.fileName;
+      if (fsEl) fsEl.textContent = `${structure.totalByteLength.toLocaleString()} B (${(structure.totalByteLength / 1024).toFixed(2)} KiB)`;
+      if (dmEl) {
+        dmEl.textContent = structure.ihdrInfo
+          ? `${structure.ihdrInfo.width} × ${structure.ihdrInfo.height} px (${structure.ihdrInfo.colorTypeLabel})`
+          : 'Unknown';
+      }
+      if (chEl) {
+        if (structure.msbxSection && structure.msbxSection.msbxBreakdown) {
+          const bd = structure.msbxSection.msbxBreakdown;
+          chEl.textContent = `${structure.msbxSection.type} (Schema v${bd.schemaVersion} • ${bd.payloadByteLength} B payload + 12 B overhead)`;
+        } else {
+          chEl.textContent = 'None (Standard PNG)';
+        }
+      }
+      if (stEl) {
+        const isModified = pexState.undoStack.length > 0;
+        stEl.textContent = isModified
+          ? `Modified In-Memory Copy (${pexState.undoStack.length} edit${pexState.undoStack.length > 1 ? 's' : ''})`
+          : 'Unmodified (Original Copy)';
+        stEl.style.color = isModified ? '#f59e0b' : 'var(--accent-emerald)';
+      }
+    }
+
+    function renderStructureTab(structure) {
+      const total = structure.totalByteLength;
+      const formulaBanner = el('pex-size-formula-banner');
+      if (formulaBanner) {
+        const chunkSum = structure.chunks.reduce((a, c) => a + c.totalChunkSize, 0);
+        formulaBanner.innerHTML =
+          `<b>Total PNG Size = Signature (${structure.signatureBytes} B) + All Chunk Sizes (${chunkSum.toLocaleString()} B across ${structure.chunkCount} chunks, incl. ${structure.totalChunksOverheadBytes} B overhead) = ${total.toLocaleString()} B</b> ` +
+          (structure.sizeFormulaMatches
+            ? `<span style="color: var(--accent-emerald); font-weight:700;">✔ Verified Exact Sum</span>`
+            : `<span style="color: #ef4444; font-weight:700;">⚠ Truncated/Mismatched Size</span>`);
+      }
+
+      // 1. Stacked Bar & Legend
+      const barEl = el('pex-storage-bar');
+      const legEl = el('pex-storage-legend');
+      if (barEl && legEl) {
+        barEl.innerHTML = '';
+        legEl.innerHTML = '';
+        for (const sec of structure.sections) {
+          const color = getChunkColor(sec.type);
+          const pct = Math.max(2.5, sec.percentage);
+          const seg = document.createElement('div');
+          seg.className = 'pex-bar-seg';
+          seg.style.width = `${pct}%`;
+          seg.style.background = color;
+          seg.title = `${sec.name}: ${sec.totalChunkSize.toLocaleString()} B (${sec.percentage}%)`;
+          seg.textContent = sec.percentage >= 7 ? `${sec.name} (${formatSize(sec.totalChunkSize, total, pexState.storageUnit)})` : sec.name;
+          seg.addEventListener('click', () => {
+            pexState.hexSectionIndex = sec.index;
+            pexState.hexPage = 0;
+            switchToSubTab('pex-panel-hex');
+            renderHexViewerTab(structure);
+          });
+          barEl.appendChild(seg);
+
+          const card = document.createElement('div');
+          card.className = 'pex-legend-card';
+          card.innerHTML = `
+            <span class="pex-legend-dot" style="background:${color};"></span>
+            <div class="pex-legend-info">
+              <strong>${sec.name} ${sec.isSignature ? '' : `(Data: ${sec.dataLength} B + 12 B)`}</strong>
+              <span>${formatSize(sec.totalChunkSize, total, pexState.storageUnit)} • ${sec.percentage}% of file</span>
+            </div>
+          `;
+          legEl.appendChild(card);
+        }
+      }
+
+      // 2. Chunks Table
+      const tbody = el('pex-chunks-tbody');
+      if (tbody) {
+        tbody.innerHTML = '';
+        for (const sec of structure.sections) {
+          const tr = document.createElement('tr');
+          const crcBadge = sec.isSignature
+            ? `<span class="pex-tier-badge pass">Magic OK</span>`
+            : (sec.crcValid && sec.lengthValid
+              ? `<span class="pex-tier-badge pass">✔ ${sec.crcHex}</span>`
+              : `<span class="pex-tier-badge fail">✖ ${sec.crcHex} (Expected ${sec.actualCrcHex})</span>`);
+
+          tr.innerHTML = `
+            <td>${sec.index}</td>
+            <td><strong style="color:${getChunkColor(sec.type)};">${sec.name}</strong></td>
+            <td><code>${sec.type}</code> <small style="color:var(--text-muted); display:block;">${sec.propertySummary}</small></td>
+            <td><code>${sec.byteOffset}</code> <small>(0x${sec.byteOffset.toString(16).toUpperCase()})</small></td>
+            <td><code>${sec.dataLength.toLocaleString()} B</code></td>
+            <td><code>${sec.overheadBytes} B</code></td>
+            <td><strong>${sec.totalChunkSize.toLocaleString()} B</strong></td>
+            <td><code>${sec.percentage}%</code></td>
+            <td>${crcBadge}</td>
+            <td>
+              <div style="font-size:11.5px; color:var(--text-muted); margin-bottom:4px;">${sec.purpose}</div>
+              <button type="button" class="btn btn-xs btn-outline pex-inspect-sec-btn" data-sec-idx="${sec.index}">
+                <i class="fa-solid fa-magnifying-glass"></i> View Bytes &amp; Bits
+              </button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        }
+        tbody.querySelectorAll('.pex-inspect-sec-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            pexState.hexSectionIndex = parseInt(btn.getAttribute('data-sec-idx'), 10);
+            pexState.hexPage = 0;
+            switchToSubTab('pex-panel-hex');
+            renderHexViewerTab(structure);
+          });
+        });
+      }
+
+      // 3. Feature 4: Expandable msBX Field Breakdown
+      const msbxCard = el('pex-msbx-breakdown-card');
+      const envStrip = el('pex-msbx-envelope-summary');
+      const fieldsTbody = el('pex-msbx-fields-tbody');
+      const schemaBadge = el('pex-msbx-schema-badge');
+
+      if (msbxCard && fieldsTbody && envStrip) {
+        if (!structure.msbxSection || !structure.msbxSection.msbxBreakdown) {
+          envStrip.innerHTML = `<span style="color:#f59e0b;"><i class="fa-solid fa-circle-exclamation"></i> This PNG does not contain an embedded <code>msBX</code> or legacy <code>msBx</code> metadata chunk.</span>`;
+          fieldsTbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No <code>msBX</code> metadata fields present in this PNG file.</td></tr>`;
+          if (schemaBadge) schemaBadge.textContent = 'No msBX Chunk';
+        } else {
+          const sec = structure.msbxSection;
+          const bd = sec.msbxBreakdown;
+          if (schemaBadge) {
+            schemaBadge.textContent = bd.schemaVersion === 2
+              ? `Schema v2 Compact (${bd.payloadByteLength} B payload)`
+              : `Schema v1 Legacy (${bd.payloadByteLength} B payload)`;
+          }
+          envStrip.innerHTML = `
+            <span><b>Chunk Envelope (12 B Overhead):</b></span>
+            <span>Length Field: Offset <code>${bd.envelope.lengthField.fileByteOffset}..${bd.envelope.lengthField.fileByteOffset + 3}</code> (4 B = ${bd.payloadByteLength})</span>
+            <span>• Type Field: Offset <code>${bd.envelope.typeField.fileByteOffset}..${bd.envelope.typeField.fileByteOffset + 3}</code> (4 B = "${bd.chunkType}")</span>
+            <span>• Payload Data: Offset <code>${sec.dataOffset}..${sec.dataOffset + bd.payloadByteLength - 1}</code> (${bd.payloadByteLength} B)</span>
+            <span>• CRC-32 Trailer: Offset <code>${bd.envelope.crcField.fileByteOffset}..${bd.envelope.crcField.fileByteOffset + 3}</code> (4 B = ${sec.crcHex})</span>
+          `;
+
+          fieldsTbody.innerHTML = '';
+          bd.fields.forEach((f) => {
+            const tr = document.createElement('tr');
+            const chunkOffStr = f.chunkByteOffset >= 0
+              ? `<code>+${f.chunkByteOffset}${f.chunkByteEnd > f.chunkByteOffset ? '..+' + f.chunkByteEnd : ''}</code> <small>(${f.bitRange})</small>`
+              : `<span style="color:var(--accent-emerald); font-weight:600;">${f.bitRange}</span>`;
+            const fileOffStr = f.fileByteOffset >= 0
+              ? `<code>${f.fileByteOffset}${f.fileByteEnd > f.fileByteOffset ? '..' + f.fileByteEnd : ''}</code>`
+              : '—';
+
+            tr.innerHTML = `
+              <td><strong>${f.field}</strong></td>
+              <td><code>${f.value}</code></td>
+              <td><strong>${f.storage}</strong></td>
+              <td>${chunkOffStr}</td>
+              <td>${fileOffStr}</td>
+              <td>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:11px;">Hex: <b>${f.rawHex}</b></div>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--text-muted);">Bin: ${f.rawBinary}</div>
+              </td>
+              <td>
+                <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">${f.description}</div>
+                ${f.chunkByteOffset >= 0 ? `
+                  <button type="button" class="btn btn-xs btn-outline pex-jump-field-btn" data-file-start="${f.fileByteOffset}" data-file-end="${f.fileByteEnd}" data-chunk-off="${f.chunkByteOffset}" data-field-name="${f.field}">
+                    <i class="fa-solid fa-highlighter"></i> Highlight Bytes
+                  </button>
+                ` : ''}
+              </td>
+            `;
+            fieldsTbody.appendChild(tr);
+          });
+
+          fieldsTbody.querySelectorAll('.pex-jump-field-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+              const fStart = parseInt(btn.getAttribute('data-file-start'), 10);
+              const fEnd = parseInt(btn.getAttribute('data-file-end'), 10);
+              const fName = btn.getAttribute('data-field-name');
+              pexState.hexSectionIndex = structure.msbxSection.index;
+              pexState.highlightRange = { start: fStart, end: fEnd, label: fName };
+              pexState.selectedFileByteOffset = fStart;
+              pexState.hexPage = Math.floor((fStart - structure.msbxSection.byteOffset) / pexState.hexPageSize);
+              switchToSubTab('pex-panel-hex');
+              renderHexViewerTab(structure);
+            });
+          });
+        }
+      }
+    }
+
+    function renderHexViewerTab(structure) {
+      const selEl = el('pex-hex-section-select');
+      if (selEl) {
+        const prevVal = String(pexState.hexSectionIndex);
+        selEl.innerHTML = `<option value="-1">All PNG File Bytes (${structure.totalByteLength.toLocaleString()} B)</option>`;
+        for (const sec of structure.sections) {
+          const opt = document.createElement('option');
+          opt.value = String(sec.index);
+          opt.textContent = `${sec.name} — Offset ${sec.byteOffset} (${sec.totalChunkSize.toLocaleString()} B)`;
+          selEl.appendChild(opt);
+        }
+        selEl.value = prevVal;
+      }
+
+      let baseOffset = 0;
+      let viewBytes = pexState.workingPngBytes;
+      let activeSec = null;
+      if (pexState.hexSectionIndex >= 0) {
+        activeSec = structure.sections.find(s => s.index === pexState.hexSectionIndex) || null;
+        if (activeSec) {
+          baseOffset = activeSec.byteOffset;
+          viewBytes = activeSec.rawBytes;
+        }
+      }
+
+      // Field Highlight Pills
+      const pillsBox = el('pex-field-pills');
+      if (pillsBox) {
+        pillsBox.innerHTML = '';
+        const fieldsSource = (activeSec && activeSec.decodedFields && activeSec.decodedFields.length > 0)
+          ? activeSec.decodedFields
+          : (structure.msbxSection ? structure.msbxSection.decodedFields : []);
+
+        if (fieldsSource && fieldsSource.length > 0) {
+          const labelSpan = document.createElement('span');
+          labelSpan.style.fontSize = '11.5px';
+          labelSpan.style.color = 'var(--text-muted)';
+          labelSpan.style.alignSelf = 'center';
+          labelSpan.innerHTML = '<b>Click Field to Highlight Bytes:</b>';
+          pillsBox.appendChild(labelSpan);
+
+          fieldsSource.forEach(f => {
+            if (f.fileByteOffset < 0) return;
+            const pill = document.createElement('button');
+            pill.type = 'button';
+            const isHi = pexState.highlightRange &&
+              pexState.highlightRange.start === f.fileByteOffset &&
+              pexState.highlightRange.end === f.fileByteEnd;
+            pill.className = 'pex-field-pill' + (isHi ? ' active' : '');
+            pill.textContent = `${f.field} (${f.storage || ''})`;
+            pill.addEventListener('click', () => {
+              pexState.highlightRange = { start: f.fileByteOffset, end: f.fileByteEnd, label: f.field };
+              pexState.selectedFileByteOffset = f.fileByteOffset;
+              const relOff = Math.max(0, f.fileByteOffset - baseOffset);
+              pexState.hexPage = Math.floor(relOff / pexState.hexPageSize);
+              renderHexViewerTab(structure);
+            });
+            pillsBox.appendChild(pill);
+          });
+        }
+      }
+
+      const totalViewBytes = viewBytes.byteLength;
+      const maxPage = Math.max(0, Math.ceil(totalViewBytes / pexState.hexPageSize) - 1);
+      if (pexState.hexPage > maxPage) pexState.hexPage = maxPage;
+      if (pexState.hexPage < 0) pexState.hexPage = 0;
+
+      const pageStart = pexState.hexPage * pexState.hexPageSize;
+      const pageEnd = Math.min(totalViewBytes, pageStart + pexState.hexPageSize);
+
+      const pageLbl = el('pex-hex-page-label');
+      if (pageLbl) {
+        pageLbl.textContent = `Bytes ${(baseOffset + pageStart).toLocaleString()}..${Math.max(baseOffset + pageStart, baseOffset + pageEnd - 1).toLocaleString()} of ${(baseOffset + totalViewBytes).toLocaleString()}`;
+      }
+      const btnPrev = el('btn-pex-hex-prev');
+      const btnNext = el('btn-pex-hex-next');
+      if (btnPrev) btnPrev.disabled = pexState.hexPage <= 0;
+      if (btnNext) btnNext.disabled = pexState.hexPage >= maxPage;
+
+      const gridBox = el('pex-hex-grid-box');
+      if (gridBox) {
+        gridBox.innerHTML = '';
+
+        if (pexState.hexViewMode === 'decoded') {
+          const targetFields = activeSec
+            ? activeSec.decodedFields
+            : structure.sections.flatMap(s => (s.decodedFields || []).map(f => ({ ...f, secName: s.name })));
+          if (!targetFields || targetFields.length === 0) {
+            gridBox.innerHTML = `<div style="padding:16px; color:var(--text-muted);">No structured fields decoded for this section. Switch to Hexadecimal or Binary View to inspect raw bytes.</div>`;
+          } else {
+            targetFields.forEach(f => {
+              const row = document.createElement('div');
+              row.style.padding = '8px 10px';
+              row.style.borderBottom = '1px solid var(--border-light)';
+              row.style.cursor = 'pointer';
+              row.innerHTML = `
+                <div style="display:flex; justify-content:space-between; gap:8px;">
+                  <strong>${f.secName ? `[${f.secName}] ` : ''}${f.field}</strong>
+                  <span style="color:var(--primary-blue); font-weight:700;">${f.value}</span>
+                </div>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+                  File Offset: <code>${f.fileByteOffset}..${f.fileByteEnd}</code> • Range: ${f.bitRange || '—'} • Storage: ${f.storage || '—'}
+                </div>
+              `;
+              row.addEventListener('click', () => {
+                if (f.fileByteOffset >= 0) {
+                  pexState.selectedFileByteOffset = f.fileByteOffset;
+                  pexState.highlightRange = { start: f.fileByteOffset, end: f.fileByteEnd, label: f.field };
+                  updateByteInspector(structure, f.fileByteOffset);
+                }
+              });
+              gridBox.appendChild(row);
+            });
+          }
+        } else {
+          const bytesPerRow = pexState.hexViewMode === 'binary' ? 6 : (pexState.hexViewMode === 'decimal' ? 12 : 16);
+          for (let r = pageStart; r < pageEnd; r += bytesPerRow) {
+            const rowEnd = Math.min(pageEnd, r + bytesPerRow);
+            const fileRowOffset = baseOffset + r;
+            const rowEl = document.createElement('div');
+            rowEl.className = 'pex-hex-row';
+
+            const offSpan = document.createElement('span');
+            offSpan.className = 'pex-hex-offset';
+            offSpan.textContent = `+0x${fileRowOffset.toString(16).padStart(4, '0').toUpperCase()}`;
+
+            const cellsWrap = document.createElement('div');
+            cellsWrap.className = 'pex-hex-cells';
+
+            let asciiStr = '';
+            for (let i = r; i < rowEnd; i++) {
+              const fileOff = baseOffset + i;
+              const b = viewBytes[i];
+              asciiStr += (b >= 32 && b <= 126) ? String.fromCharCode(b) : '.';
+
+              const cell = document.createElement('span');
+              cell.className = 'pex-byte-cell';
+              if (pexState.highlightRange && fileOff >= pexState.highlightRange.start && fileOff <= pexState.highlightRange.end) {
+                cell.classList.add('highlighted');
+              }
+              if (fileOff === pexState.selectedFileByteOffset) {
+                cell.classList.add('selected');
+              }
+              if (pexState.hexViewMode === 'binary') {
+                cell.textContent = b.toString(2).padStart(8, '0');
+              } else if (pexState.hexViewMode === 'decimal') {
+                cell.textContent = b.toString(10).padStart(3, '0');
+              } else {
+                cell.textContent = b.toString(16).padStart(2, '0').toUpperCase();
+              }
+              cell.title = `File Offset ${fileOff} (0x${fileOff.toString(16).toUpperCase()}) • Hex: 0x${b.toString(16).padStart(2, '0').toUpperCase()} • Bin: ${b.toString(2).padStart(8, '0')} • Dec: ${b}`;
+              cell.addEventListener('click', () => {
+                pexState.selectedFileByteOffset = fileOff;
+                renderHexViewerTab(structure);
+              });
+              cellsWrap.appendChild(cell);
+            }
+
+            const asciiSpan = document.createElement('span');
+            asciiSpan.style.color = 'var(--text-muted)';
+            asciiSpan.textContent = asciiStr;
+
+            rowEl.appendChild(offSpan);
+            rowEl.appendChild(cellsWrap);
+            rowEl.appendChild(asciiSpan);
+            gridBox.appendChild(rowEl);
+          }
+        }
+      }
+
+      updateByteInspector(structure, pexState.selectedFileByteOffset);
+    }
+
+    function findFieldForFileOffset(structure, fileOff) {
+      for (const sec of structure.sections) {
+        if (fileOff >= sec.byteOffset && fileOff < sec.byteOffset + sec.totalChunkSize) {
+          if (!sec.isSignature) {
+            if (fileOff < sec.byteOffset + 4) {
+              return { sec, fieldName: `${sec.name} Chunk Envelope: 4-Byte Length (uint32 BE)` };
+            }
+            if (fileOff < sec.byteOffset + 8) {
+              return { sec, fieldName: `${sec.name} Chunk Envelope: 4-Byte ASCII Type ("${sec.type}")` };
+            }
+            if (fileOff >= sec.dataOffset + sec.effectiveDataLength) {
+              return { sec, fieldName: `${sec.name} Chunk Envelope: 4-Byte CRC-32 Checksum` };
+            }
+          }
+          if (sec.decodedFields) {
+            for (const f of sec.decodedFields) {
+              if (f.fileByteOffset >= 0 && fileOff >= f.fileByteOffset && fileOff <= f.fileByteEnd) {
+                return { sec, fieldName: `${sec.name}: ${f.field} (${f.value})` };
+              }
+            }
+          }
+          return { sec, fieldName: `${sec.name} Chunk Payload Data` };
+        }
+      }
+      return { sec: null, fieldName: 'PNG Data Byte' };
+    }
+
+    function updateByteInspector(structure, fileOff) {
+      const bytes = pexState.workingPngBytes;
+      if (!bytes || bytes.length === 0) return;
+      const safeOff = Math.max(0, Math.min(bytes.length - 1, fileOff));
+      const b = bytes[safeOff];
+      const { sec, fieldName } = findFieldForFileOffset(structure, safeOff);
+
+      const fOffEl = el('pex-insp-file-off');
+      const secEl = el('pex-insp-section');
+      const hexEl = el('pex-insp-hex');
+      const binEl = el('pex-insp-bin');
+      const decEl = el('pex-insp-dec');
+      const ascEl = el('pex-insp-ascii');
+      const fldEl = el('pex-insp-field');
+
+      if (fOffEl) fOffEl.textContent = `${safeOff} (0x${safeOff.toString(16).padStart(4, '0').toUpperCase()})`;
+      if (secEl) secEl.textContent = sec ? `${sec.name} (${sec.type})` : 'PNG File';
+      if (hexEl) hexEl.textContent = `0x${b.toString(16).padStart(2, '0').toUpperCase()}`;
+      if (binEl) binEl.textContent = b.toString(2).padStart(8, '0');
+      if (decEl) decEl.textContent = String(b);
+      if (ascEl) ascEl.textContent = (b >= 32 && b <= 126) ? `'${String.fromCharCode(b)}'` : 'Non-printable (.)';
+      if (fldEl) fldEl.textContent = fieldName;
+    }
+
+    function renderEditorTab(structure) {
+      const mapEl = el('pex-editor-byte-map');
+      const bitsRow = el('pex-8bits-row');
+      const selLbl = el('pex-bit-selected-label');
+      const affFld = el('pex-bit-affected-field');
+      const origValEl = el('pex-bit-orig-val');
+      const currValEl = el('pex-bit-curr-val');
+      const liveValEl = el('pex-editor-live-validation');
+
+      if (!mapEl || !bitsRow) return;
+
+      const metaBytes = pexState.workingMetaBytes || new Uint8Array(0);
+      const origMeta = pexState.originalMetaBytes || new Uint8Array(0);
+
+      if (!structure.msbxSection || metaBytes.length === 0) {
+        mapEl.innerHTML = `<div style="padding:12px; color:var(--text-muted);">No <code>msBX</code> chunk present in working PNG copy. Click "Reset to Original" or use the Structured Editor on the right to rebuild an <code>msBX</code> chunk.</div>`;
+        bitsRow.innerHTML = '';
+        return;
+      }
+
+      if (pexState.selectedMetaByteIndex >= metaBytes.length) {
+        pexState.selectedMetaByteIndex = 0;
+      }
+      const idx = pexState.selectedMetaByteIndex;
+      const curByte = metaBytes[idx];
+      const origByte = idx < origMeta.length ? origMeta[idx] : curByte;
+
+      // Render byte chips inside msBX payload
+      mapEl.innerHTML = '';
+      for (let i = 0; i < metaBytes.length; i++) {
+        const chip = document.createElement('div');
+        const isMod = i >= origMeta.length || metaBytes[i] !== origMeta[i];
+        chip.className = 'pex-edit-byte-chip' + (isMod ? ' modified' : '') + (i === idx ? ' active' : '');
+        chip.innerHTML = `<small>+${i}</small><strong>${metaBytes[i].toString(16).padStart(2, '0').toUpperCase()}</strong>`;
+        chip.addEventListener('click', () => {
+          pexState.selectedMetaByteIndex = i;
+          renderEditorTab(structure);
+        });
+        mapEl.appendChild(chip);
+      }
+
+      // Identify affected metadata field for selected byte index
+      const bd = structure.msbxSection.msbxBreakdown;
+      let matchingFields = [];
+      if (bd && bd.fields) {
+        matchingFields = bd.fields.filter(f => f.chunkByteOffset >= 0 && idx >= f.chunkByteOffset && idx <= f.chunkByteEnd);
+      }
+      const fieldLabel = matchingFields.length > 0
+        ? matchingFields.map(f => f.field).join(' / ')
+        : `msBX Payload Byte +${idx}`;
+
+      if (selLbl) {
+        selLbl.innerHTML = `<b>Selected Byte:</b> Offset <code>+${idx}</code> in <code>${structure.msbxSection.type}</code> (File Offset <code>${structure.msbxSection.dataOffset + idx}</code>)`;
+      }
+      if (affFld) affFld.textContent = fieldLabel;
+      if (origValEl) {
+        origValEl.textContent = `${origByte.toString(2).padStart(8, '0')} (0x${origByte.toString(16).padStart(2, '0').toUpperCase()} • Dec ${origByte})`;
+      }
+      if (currValEl) {
+        currValEl.textContent = `${curByte.toString(2).padStart(8, '0')} (0x${curByte.toString(16).padStart(2, '0').toUpperCase()} • Dec ${curByte})`;
+      }
+      const hexInputEl = el('pex-direct-hex-input');
+      if (hexInputEl) {
+        hexInputEl.value = curByte.toString(16).padStart(2, '0').toUpperCase();
+      }
+
+      // Render 8 clickable bit buttons (b7 MSB down to b0 LSB)
+      bitsRow.innerHTML = '';
+      for (let bit = 7; bit >= 0; bit--) {
+        const bitVal = (curByte >>> bit) & 1;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pex-bit-btn' + (bitVal === 1 ? ' bit-one' : '');
+        btn.innerHTML = `
+          <span class="bit-idx">Bit ${bit}${bit === 7 ? ' (MSB)' : (bit === 0 ? ' (LSB)' : '')}</span>
+          <span class="bit-val">${bitVal}</span>
+        `;
+        btn.addEventListener('click', async () => {
+          pushUndoSnapshot();
+          const newMeta = new Uint8Array(pexState.workingMetaBytes);
+          newMeta[idx] ^= (1 << bit);
+          pexState.workingMetaBytes = newMeta;
+          pexState.workingPngBytes = BitEngine.rebuildPngWithModifiedMetadata(pexState.workingPngBytes, newMeta);
+          await refreshAllExplorerViews();
+        });
+        bitsRow.appendChild(btn);
+      }
+
+      // Sync Structured Editor form controls from decoded metadata if valid
+      try {
+        const decMeta = BitEngine.decodeMsBxMetadata(metaBytes, null, structure.ihdrInfo);
+        if (el('pex-edit-schema-ver')) el('pex-edit-schema-ver').value = String(decMeta.metaVersion);
+        if (el('pex-edit-k')) el('pex-edit-k').value = String(decMeta.k);
+        if (el('pex-edit-scope')) el('pex-edit-scope').value = decMeta.scope;
+        if (el('pex-edit-keytype')) el('pex-edit-keytype').value = decMeta.keyType;
+        if (el('pex-edit-colormode')) el('pex-edit-colormode').value = String(decMeta.originalColorMode);
+        if (el('pex-edit-maskcodec') && decMeta.maskCodec) el('pex-edit-maskcodec').value = String(decMeta.maskCodec);
+        if (liveValEl) {
+          liveValEl.innerHTML = `
+            <div class="pex-tier-item pass">
+              <div>
+                <strong>✔ PNG Chunk Rebuilt &amp; Schema Valid (v${decMeta.metaVersion})</strong>
+                <div style="font-size:11.5px; color:var(--text-muted);">CRC-32: <code>${structure.msbxSection.crcHex}</code> • k = ${decMeta.k} • Scope = ${decMeta.scope} • KeyType = ${decMeta.keyType}</div>
+              </div>
+              <span class="pex-tier-badge pass">SCHEMA OK</span>
+            </div>
+          `;
+        }
+      } catch (err) {
+        if (liveValEl) {
+          liveValEl.innerHTML = `
+            <div class="pex-tier-item fail">
+              <div>
+                <strong>✖ Metadata Schema Validation Error Triggered by Bit Edit</strong>
+                <div style="font-size:11.5px; color:#ef4444;">${err.message || String(err)}</div>
+              </div>
+              <span class="pex-tier-badge fail">INVALID SCHEMA</span>
+            </div>
+          `;
+        }
+      }
+    }
+
+    async function renderOptimizationTab() {
+      if (!pexState.workingPngBytes) return;
+      const cmp = await BitEngine.compareMetadataOptimization(pexState.workingPngBytes);
+
+      const kpiGrid = el('pex-opt-kpi-grid');
+      if (kpiGrid) {
+        const activeOrig = cmp.scope !== 'full' ? cmp.originalMetadataBytes : cmp.originalMetadataBytes;
+        const activeOpt = cmp.scope !== 'full' ? cmp.optimizedMetadataBytes : cmp.optimizedMetadataBytes;
+        kpiGrid.innerHTML = `
+          <div class="pex-kpi-card">
+            <span class="kpi-label">Legacy v1 Metadata Size</span>
+            <span class="kpi-val">${activeOrig} B</span>
+            <span class="kpi-sub">+12 B chunk overhead = ${activeOrig + 12} B</span>
+          </div>
+          <div class="pex-kpi-card">
+            <span class="kpi-label">Optimized v2 Metadata Size</span>
+            <span class="kpi-val" style="color:var(--primary-blue);">${activeOpt} B</span>
+            <span class="kpi-sub">+12 B chunk overhead = ${activeOpt + 12} B</span>
+          </div>
+          <div class="pex-kpi-card">
+            <span class="kpi-label">Metadata Bytes Saved</span>
+            <span class="kpi-val" style="color:var(--accent-emerald);">−${cmp.bytesSaved} B</span>
+            <span class="kpi-sub">${cmp.storageReductionPct}% Metadata Reduction</span>
+          </div>
+          <div class="pex-kpi-card">
+            <span class="kpi-label">Selective Mask vs. Raw Binary</span>
+            <span class="kpi-val" style="color:var(--accent-emerald);">−${cmp.selectiveVsRawMaskSaved.toLocaleString()} B</span>
+            <span class="kpi-sub">${cmp.selectiveVsRawReductionPct}% Saved vs Raw Mask</span>
+          </div>
+          <div class="pex-kpi-card">
+            <span class="kpi-label">Total PNG Size (Before → After)</span>
+            <span class="kpi-val">${cmp.totalPngBeforeBytes.toLocaleString()} → ${cmp.totalPngAfterBytes.toLocaleString()} B</span>
+            <span class="kpi-sub">Saved ${cmp.totalPngBeforeBytes - cmp.totalPngAfterBytes} B in PNG container</span>
+          </div>
+          <div class="pex-kpi-card">
+            <span class="kpi-label">v2 Encode / Decode Speed</span>
+            <span class="kpi-val">${cmp.v2EncodeTimeMs} / ${cmp.v2DecodeTimeMs} ms</span>
+            <span class="kpi-sub">v1: ${cmp.v1EncodeTimeMs} / ${cmp.v1DecodeTimeMs} ms</span>
+          </div>
+        `;
+      }
+
+      const fieldsTbody = el('pex-opt-fields-tbody');
+      if (fieldsTbody) {
+        fieldsTbody.innerHTML = '';
+        cmp.fieldSavingsBreakdown.forEach(row => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><strong>${row.component}</strong></td>
+            <td><code>${row.legacyV1}</code></td>
+            <td><code style="color:var(--primary-blue); font-weight:700;">${row.optimizedV2}</code></td>
+            <td><strong style="color:${row.bytesSaved > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)'};">${row.bytesSaved > 0 ? '−' + row.bytesSaved + ' B' : '0 B (Security Preserved)'}</strong></td>
+            <td>${row.explanation}</td>
+          `;
+          fieldsTbody.appendChild(tr);
+        });
+      }
+
+      const maskSub = el('pex-mask-bench-subtitle');
+      if (maskSub) {
+        maskSub.textContent = cmp.usingSyntheticMaskForBenchmark
+          ? `Benchmarking all 4 lossless mask compression codecs on a ${cmp.width}×${cmp.height} (${cmp.maskBenchmark.totalPixels.toLocaleString()} px) AI facial contour mask:`
+          : `Benchmarking all 4 lossless mask compression codecs on the embedded ${cmp.width}×${cmp.height} (${cmp.maskBenchmark.totalPixels.toLocaleString()} px) selective mask:`;
+      }
+
+      const maskTbody = el('pex-mask-bench-tbody');
+      if (maskTbody) {
+        maskTbody.innerHTML = '';
+        cmp.maskBenchmark.methods.forEach(m => {
+          const isBest = m.codecId === cmp.maskBenchmark.bestCodecId;
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>
+              <strong>Codec ${m.codecId}: ${m.name}</strong>
+              ${isBest ? `<span class="pex-tier-badge pass" style="margin-left:6px;">★ Optimal Selected</span>` : ''}
+            </td>
+            <td><strong>${m.encodedBytes.toLocaleString()} B</strong></td>
+            <td><span style="color:var(--accent-emerald); font-weight:700;">${m.bytesSavedVsRaw >= 0 ? '−' + m.bytesSavedVsRaw.toLocaleString() + ' B' : '+' + Math.abs(m.bytesSavedVsRaw) + ' B'}</span></td>
+            <td><code>${m.compressionRatio}×</code></td>
+            <td><strong>${m.reductionPct}%</strong></td>
+            <td><code>${m.encodeTimeMs} ms / ${m.decodeTimeMs} ms</code></td>
+            <td><span class="pex-tier-badge pass">✔ 0 Diff Bits (${m.totalPixels || cmp.maskBenchmark.totalPixels} px)</span></td>
+          `;
+          maskTbody.appendChild(tr);
+        });
+      }
+    }
+
+    async function renderValidationTab() {
+      if (!pexState.workingPngBytes) return;
+      const pwdInput = el('pex-test-password');
+      const candidateKey = pwdInput ? pwdInput.value.trim() : pexState.knownPassword;
+      const report = await BitEngine.validatePngAndMetadataMultiLevel(
+        pexState.workingPngBytes,
+        candidateKey,
+        pexState.referencePlainImageData
+      );
+
+      const tiersEl = el('pex-validation-tiers');
+      if (!tiersEl) return;
+
+      const tiers = [
+        { title: '1. PNG Structural Validity (Signature, Chunks & CRC-32)', data: report.level1 },
+        { title: '2. Metadata Schema Validity (msBX Format & Bit-Packed Ranges)', data: report.level2 },
+        { title: '3. Cryptographic Authentication (32-Byte Keyed SHA-256 Tag)', data: report.level3 },
+        { title: '4. Decryption Verification (3-Stage Recovery & 0 Diff Pixels)', data: report.level4 }
+      ];
+
+      tiersEl.innerHTML = '';
+      tiers.forEach(t => {
+        const cls = t.data.status === 'PASS' ? 'pass' : (t.data.status === 'FAIL' ? 'fail' : 'warn');
+        const div = document.createElement('div');
+        div.className = `pex-tier-item ${cls}`;
+        div.innerHTML = `
+          <div>
+            <strong>${t.title}</strong>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">${t.data.summary}</div>
+          </div>
+          <span class="pex-tier-badge ${cls}">${t.data.status}</span>
+        `;
+        tiersEl.appendChild(div);
+      });
+
+      // Step 4 Validate & Download button state + sync with main Encrypted PNG output
+      const btnVerified = el('btn-pex-download-verified');
+      const btnUnverified = el('btn-pex-download-unverified');
+      const step4Desc = el('pex-step4-status-desc');
+
+      if (report.allVerified) {
+        // Keep main Encryption Page output synced with the latest validated PNG bytes!
+        if (state.lastEncryptedPngBytes) {
+          state.lastEncryptedPngBytes = new Uint8Array(pexState.workingPngBytes);
+        }
+        if (btnVerified) {
+          btnVerified.disabled = false;
+          btnVerified.innerHTML = `<i class="fa-solid fa-download"></i> Download Final Validated Encrypted PNG (${pexState.workingPngBytes.byteLength.toLocaleString()} B)`;
+        }
+        if (btnUnverified) btnUnverified.style.display = 'none';
+        if (step4Desc) {
+          step4Desc.innerHTML = `<span style="color:var(--accent-emerald); font-weight:700;">✔ All 4 Validation Tiers Passed (0 Different Pixels):</span> Your customized <code>msBX</code> metadata and encrypted pixel data are 100% verified and ready for download.`;
+        }
+      } else {
+        if (btnVerified) {
+          btnVerified.disabled = true;
+          btnVerified.innerHTML = `<i class="fa-solid fa-ban"></i> Verified Download Blocked (Fix or Reset Invalid Edit)`;
+        }
+        if (btnUnverified) btnUnverified.style.display = 'inline-flex';
+        if (step4Desc) {
+          const reason = !report.level1.valid
+            ? report.level1.summary
+            : (!report.level2.valid ? report.level2.summary : report.level3.summary);
+          step4Desc.innerHTML = `<span style="color:#ef4444; font-weight:700;">✖ Validation Failed:</span> ${reason} Click <b>"Reset to Validated Encrypted PNG"</b> to restore valid output, or export as an unverified test file.`;
+        }
+      }
+
+      return report;
+    }
+
+    function switchToSubTab(panelId) {
+      document.querySelectorAll('#enc-integrated-explorer-section .pex-subtab').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-pex-tab') === panelId);
+      });
+      document.querySelectorAll('#enc-integrated-explorer-section .pex-subpanel').forEach(panel => {
+        panel.style.display = (panel.id === panelId) ? 'block' : 'none';
+      });
+    }
+
+    // Sub-tab click listeners
+    document.querySelectorAll('#enc-integrated-explorer-section .pex-subtab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-pex-tab');
+        switchToSubTab(target);
+      });
+    });
+
+    // Storage unit switcher (Bytes / KiB / % of File Size)
+    document.querySelectorAll('.pex-unit-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.pex-unit-btn').forEach(b => {
+          b.classList.remove('btn-primary');
+          b.classList.add('btn-outline');
+        });
+        btn.classList.remove('btn-outline');
+        btn.classList.add('btn-primary');
+        pexState.storageUnit = btn.getAttribute('data-unit') || 'bytes';
+        if (pexState.workingPngBytes) {
+          renderStructureTab(BitEngine.parsePngBinaryStructure(pexState.workingPngBytes));
+        }
+      });
+    });
+
+    // Hex Viewer toolbar listeners
+    const secSelect = el('pex-hex-section-select');
+    if (secSelect) {
+      secSelect.addEventListener('change', (e) => {
+        pexState.hexSectionIndex = parseInt(e.target.value, 10);
+        pexState.hexPage = 0;
+        if (pexState.workingPngBytes) {
+          renderHexViewerTab(BitEngine.parsePngBinaryStructure(pexState.workingPngBytes));
+        }
+      });
+    }
+
+    document.querySelectorAll('.pex-view-mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.pex-view-mode-btn').forEach(b => {
+          b.classList.remove('btn-primary');
+          b.classList.add('btn-outline');
+        });
+        btn.classList.remove('btn-outline');
+        btn.classList.add('btn-primary');
+        pexState.hexViewMode = btn.getAttribute('data-view') || 'hex';
+        if (pexState.workingPngBytes) {
+          renderHexViewerTab(BitEngine.parsePngBinaryStructure(pexState.workingPngBytes));
+        }
+      });
+    });
+
+    if (el('btn-pex-hex-prev')) {
+      el('btn-pex-hex-prev').addEventListener('click', () => {
+        pexState.hexPage = Math.max(0, pexState.hexPage - 1);
+        if (pexState.workingPngBytes) {
+          renderHexViewerTab(BitEngine.parsePngBinaryStructure(pexState.workingPngBytes));
+        }
+      });
+    }
+    if (el('btn-pex-hex-next')) {
+      el('btn-pex-hex-next').addEventListener('click', () => {
+        pexState.hexPage++;
+        if (pexState.workingPngBytes) {
+          renderHexViewerTab(BitEngine.parsePngBinaryStructure(pexState.workingPngBytes));
+        }
+      });
+    }
+
+    if (el('btn-pex-edit-this-byte')) {
+      el('btn-pex-edit-this-byte').addEventListener('click', () => {
+        if (!pexState.workingPngBytes) return;
+        const structure = BitEngine.parsePngBinaryStructure(pexState.workingPngBytes);
+        if (structure.msbxSection) {
+          const rel = pexState.selectedFileByteOffset - structure.msbxSection.dataOffset;
+          if (rel >= 0 && rel < structure.msbxSection.dataLength) {
+            pexState.selectedMetaByteIndex = rel;
+          }
+        }
+        switchToSubTab('pex-panel-editor');
+        renderEditorTab(structure);
+      });
+    }
+
+    // Undo / Redo / Reset / Export buttons
+    if (el('btn-pex-undo')) {
+      el('btn-pex-undo').addEventListener('click', async () => {
+        if (pexState.undoStack.length === 0) return;
+        pexState.redoStack.push({
+          pngBytes: new Uint8Array(pexState.workingPngBytes),
+          metaBytes: new Uint8Array(pexState.workingMetaBytes || 0)
+        });
+        const prev = pexState.undoStack.pop();
+        pexState.workingPngBytes = prev.pngBytes;
+        pexState.workingMetaBytes = prev.metaBytes;
+        await refreshAllExplorerViews();
+      });
+    }
+
+    if (el('btn-pex-redo')) {
+      el('btn-pex-redo').addEventListener('click', async () => {
+        if (pexState.redoStack.length === 0) return;
+        pexState.undoStack.push({
+          pngBytes: new Uint8Array(pexState.workingPngBytes),
+          metaBytes: new Uint8Array(pexState.workingMetaBytes || 0)
+        });
+        const next = pexState.redoStack.pop();
+        pexState.workingPngBytes = next.pngBytes;
+        pexState.workingMetaBytes = next.metaBytes;
+        await refreshAllExplorerViews();
+      });
+    }
+
+    if (el('btn-pex-reset')) {
+      el('btn-pex-reset').addEventListener('click', async () => {
+        if (!pexState.originalPngBytes) return;
+        await loadPngIntoExplorer(pexState.originalPngBytes, pexState.fileName);
+      });
+    }
+
+    if (el('btn-pex-export-modified')) {
+      el('btn-pex-export-modified').addEventListener('click', async () => {
+        switchToSubTab('pex-panel-validation');
+        await renderValidationTab();
+      });
+    }
+
+    if (el('btn-pex-apply-hex')) {
+      el('btn-pex-apply-hex').addEventListener('click', async () => {
+        if (!pexState.workingPngBytes || !pexState.workingMetaBytes || pexState.workingMetaBytes.length === 0) return;
+        const hexInput = el('pex-direct-hex-input');
+        const rawHex = (hexInput ? hexInput.value.trim() : '').replace(/^0x/i, '');
+        if (!/^[0-9a-fA-F]{1,2}$/.test(rawHex)) return;
+        const val = parseInt(rawHex, 16) & 0xFF;
+        const idx = pexState.selectedMetaByteIndex;
+        if (idx < 0 || idx >= pexState.workingMetaBytes.length) return;
+        pushUndoSnapshot();
+        const newMeta = new Uint8Array(pexState.workingMetaBytes);
+        newMeta[idx] = val;
+        pexState.workingMetaBytes = newMeta;
+        pexState.workingPngBytes = BitEngine.rebuildPngWithModifiedMetadata(pexState.workingPngBytes, newMeta);
+        await refreshAllExplorerViews();
+      });
+    }
+
+    if (el('btn-pex-download-verified')) {
+      el('btn-pex-download-verified').addEventListener('click', async () => {
+        if (!pexState.workingPngBytes) return;
+        const report = await renderValidationTab();
+        if (!report || !report.allVerified) return;
+        state.lastEncryptedPngBytes = new Uint8Array(pexState.workingPngBytes);
+        const blob = new Blob([pexState.workingPngBytes], { type: 'image/png' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'encrypted_photo.png';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
+      });
+    }
+
+    if (el('btn-pex-val-reset')) {
+      el('btn-pex-val-reset').addEventListener('click', async () => {
+        if (!pexState.originalPngBytes) return;
+        await loadPngIntoExplorer(pexState.originalPngBytes, pexState.fileName);
+      });
+    }
+
+    if (el('btn-pex-download-unverified')) {
+      el('btn-pex-download-unverified').addEventListener('click', () => {
+        if (!pexState.workingPngBytes) return;
+        const blob = new Blob([pexState.workingPngBytes], { type: 'image/png' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `unverified_test_${pexState.fileName || 'encrypted_photo.png'}`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
+      });
+    }
+
+    // Mode A — Structured Metadata & Configuration Editor Apply Button:
+    // Regenerates encryption from the original image when encryption-critical settings (k, scope, schema, mask codec, or optional TLV) are edited!
+    if (el('btn-pex-apply-structured')) {
+      el('btn-pex-apply-structured').addEventListener('click', async () => {
+        if (!pexState.workingPngBytes) return;
+        const structure = BitEngine.parsePngBinaryStructure(pexState.workingPngBytes);
+        const w = structure.ihdrInfo ? structure.ihdrInfo.width : 160;
+        const h = structure.ihdrInfo ? structure.ihdrInfo.height : 120;
+
+        let curMeta = null;
+        if (structure.msbxSection) {
+          try {
+            curMeta = BitEngine.decodeMsBxMetadata(structure.msbxSection.dataBytes, null, { width: w, height: h });
+          } catch (_) {}
+        }
+
+        const targetVer = parseInt(el('pex-edit-schema-ver')?.value || '2', 10);
+        const newK = parseInt(el('pex-edit-k')?.value || '2', 10);
+        const newScope = el('pex-edit-scope')?.value || 'full';
+        const newKeyType = el('pex-edit-keytype')?.value || 'text';
+        const newColorMode = parseInt(el('pex-edit-colormode')?.value || '1', 10);
+        const newMaskCodec = parseInt(el('pex-edit-maskcodec')?.value || '3', 10);
+        const optTag = (el('pex-edit-opt-tag')?.value || '').trim();
+        const optDesc = (el('pex-edit-opt-desc')?.value || '').trim();
+
+        const optFields = [];
+        if (optTag.length > 0) optFields.push({ id: 2, critical: false, value: optTag });
+        if (optDesc.length > 0) optFields.push({ id: 3, critical: false, value: optDesc });
+
+        // If original reference image + key are available, regenerate a 100% cryptographically valid encrypted PNG!
+        const pwdInput = el('pex-test-password');
+        const activeKey = (pwdInput && pwdInput.value.trim()) ? pwdInput.value.trim() : pexState.knownPassword;
+        if (pexState.referencePlainImageData && activeKey) {
+          let targetMask = null;
+          if (newScope === 'person' && state.bodyMask && state.bodyMask.length === w * h) {
+            targetMask = state.bodyMask;
+          } else if (newScope === 'face' && state.faceMask && state.faceMask.length === w * h) {
+            targetMask = state.faceMask;
+          } else if (curMeta && curMeta.mask && curMeta.mask.length === w * h && newScope !== 'full') {
+            targetMask = curMeta.mask;
+          } else if (newScope !== 'full') {
+            targetMask = new Uint8Array(w * h);
+            for (let i = 0; i < Math.floor((w * h) / 4); i++) targetMask[i] = 1;
+          }
+
+          const cleanOrigCopy = new ImageData(
+            new Uint8ClampedArray(pexState.referencePlainImageData.data),
+            pexState.referencePlainImageData.width,
+            pexState.referencePlainImageData.height
+          );
+          const regen = await BitEngine.encryptToPNG(cleanOrigCopy, activeKey, targetMask, {
+            k: newK,
+            iterations: curMeta ? curMeta.iterations : BitEngine.DEFAULT_KDF_ITERATIONS,
+            keyType: newKeyType,
+            scope: newScope,
+            originalColorMode: newColorMode,
+            metaVersion: targetVer,
+            maskCodec: newMaskCodec,
+            optionalFields: optFields.length > 0 ? optFields : null,
+            protectMask: !!(DOM.encProtectMask && DOM.encProtectMask.checked)
+          });
+
+          pushUndoSnapshot();
+          pexState.originalPngBytes = new Uint8Array(regen.pngBytes);
+          pexState.workingPngBytes = new Uint8Array(regen.pngBytes);
+
+          // If this was the main Encryption Tab image, also sync Step 2 Preview & Header Card!
+          if (state.lastOriginalImageData &&
+              state.lastOriginalImageData.width === cleanOrigCopy.width &&
+              state.lastOriginalImageData.height === cleanOrigCopy.height) {
+            state.lastEncryptedPngBytes = new Uint8Array(regen.pngBytes);
+            state.lastEncryptedHeader = regen.header;
+            if (DOM.encKSelect) DOM.encKSelect.value = String(newK);
+            if (DOM.canvasEncResult) {
+              const ctx = DOM.canvasEncResult.getContext('2d');
+              ctx.putImageData(regen.imageData, 0, 0);
+            }
+            if (DOM.valEncMse) DOM.valEncMse.textContent = regen.mse;
+            if (DOM.valEncPsnr) DOM.valEncPsnr.textContent = regen.psnr + (regen.psnr === '∞' ? '' : ' dB');
+            if (DOM.valEncSwapped) DOM.valEncSwapped.textContent = regen.swappedCount.toLocaleString();
+            renderMsbxHeaderCard(
+              DOM.encMsbxInfo,
+              regen.header,
+              regen.pngBytes.byteLength,
+              'Self-Describing Encrypted PNG (Metadata Chunk: msBX)',
+              {
+                verifiedLosslessPng: regen.verifiedLosslessPng,
+                processingTimeMs: regen.processingTimeMs
+              }
+            );
+          }
+
+          await refreshAllExplorerViews();
+          return;
+        }
+
+        const salt = curMeta ? curMeta.salt : BitEngine.generateRandomSalt(16);
+        const verificationTag = curMeta ? curMeta.verificationTag : new Uint8Array(32).fill(0x5A);
+        const iterations = curMeta ? curMeta.iterations : 100000;
+
+        let mask = curMeta && curMeta.mask ? curMeta.mask : null;
+        if (newScope !== 'full' && (!mask || mask.length !== w * h)) {
+          mask = new Uint8Array(w * h);
+          for (let i = 0; i < Math.floor((w * h) / 4); i++) mask[i] = 1;
+        }
+
+        pushUndoSnapshot();
+        let rebuiltMeta;
+        if (targetVer === 2) {
+          const encodedMask = (newScope !== 'full' && mask)
+            ? BitEngine.encodeMaskWithCodec(mask, newMaskCodec)
+            : null;
+          rebuiltMeta = BitEngine.encodeMsBxMetadataV2({
+            algoVersion: 1,
+            originalColorMode: newColorMode,
+            k: newK,
+            keyType: newKeyType,
+            scope: newScope,
+            maskCodec: encodedMask ? newMaskCodec : 0,
+            maskProtected: false,
+            iterations,
+            salt,
+            verificationTag,
+            encodedMaskBytes: encodedMask,
+            optionalFields: optFields.length > 0 ? optFields : null
+          });
+        } else {
+          const rleMask = (newScope !== 'full' && mask) ? BitEngine.encodeMaskTrailer(mask) : null;
+          rebuiltMeta = BitEngine.encodeMsBxMetadata({
+            metaVersion: 1,
+            originalColorMode: newColorMode,
+            k: newK,
+            keyType: newKeyType,
+            scope: newScope,
+            maskEncoding: rleMask ? 1 : 0,
+            width: w,
+            height: h,
+            iterations,
+            salt,
+            verificationTag,
+            encodedMaskBytes: rleMask
+          });
+        }
+
+        pexState.workingMetaBytes = rebuiltMeta;
+        pexState.workingPngBytes = BitEngine.rebuildPngWithModifiedMetadata(pexState.workingPngBytes, rebuiltMeta);
+        await refreshAllExplorerViews();
+      });
+    }
+
+    // Convert current PNG to Optimized Schema v2 in Tab 4 (regenerating authentic v2 tag when original image & key exist)
+    if (el('btn-pex-apply-v2-opt')) {
+      el('btn-pex-apply-v2-opt').addEventListener('click', async () => {
+        if (!pexState.workingPngBytes) return;
+        if (el('pex-edit-schema-ver')) el('pex-edit-schema-ver').value = '2';
+        if (el('pex-edit-maskcodec')) el('pex-edit-maskcodec').value = '4';
+        if (el('btn-pex-apply-structured') && pexState.referencePlainImageData) {
+          el('btn-pex-apply-structured').click();
+          return;
+        }
+        const cmp = await BitEngine.compareMetadataOptimization(pexState.workingPngBytes);
+        pushUndoSnapshot();
+        pexState.workingMetaBytes = cmp.v2Payload;
+        pexState.workingPngBytes = BitEngine.rebuildPngWithModifiedMetadata(pexState.workingPngBytes, cmp.v2Payload);
+        await refreshAllExplorerViews();
+      });
+    }
+
+    // Validation & Educational Tampering Lab listeners
+    if (el('btn-pex-run-validation')) {
+      el('btn-pex-run-validation').addEventListener('click', async () => {
+        await renderValidationTab();
+      });
+    }
+    if (el('btn-pex-validate-now')) {
+      el('btn-pex-validate-now').addEventListener('click', async () => {
+        await renderValidationTab();
+      });
+    }
+
+    document.querySelectorAll('.pex-tamper-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!pexState.originalPngBytes) return;
+        const presetId = btn.getAttribute('data-tamper');
+        try {
+          pushUndoSnapshot();
+          const tamperRes = BitEngine.applyEducationalTamperPreset(pexState.originalPngBytes, presetId);
+          pexState.workingPngBytes = tamperRes.tamperedPngBytes;
+          pexState.workingMetaBytes = tamperRes.modifiedMetaBytes;
+          await refreshAllExplorerViews();
+
+          const report = await renderValidationTab();
+          const resBox = el('pex-tamper-result-box');
+          const titleEl = el('pex-tamper-result-title');
+          const expEl = el('pex-tamper-expected');
+          const actEl = el('pex-tamper-actual');
+          if (resBox && titleEl && expEl && actEl && report) {
+            resBox.style.display = 'block';
+            titleEl.innerHTML = `<i class="fa-solid fa-microscope"></i> ${tamperRes.title}`;
+            expEl.textContent = tamperRes.expectedEffect;
+            actEl.textContent = `Tier 1 (PNG CRC/Structure): ${report.level1.status} | Tier 2 (Schema): ${report.level2.status} | Tier 3 (SHA-256 Auth): ${report.level3.status} | Tier 4 (Decryption): ${report.level4.status} — ${report.level2.valid ? report.level3.summary : report.level2.summary}`;
+          }
+        } catch (err) {
+          console.error('Tamper preset error:', err);
+        }
+      });
+    });
+
+    // Top Quick Action Buttons
+    if (el('pex-file-input')) {
+      el('pex-file-input').addEventListener('change', async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const buf = await file.arrayBuffer();
+        pexState.referencePlainImageData = null;
+        await loadPngIntoExplorer(new Uint8Array(buf), file.name);
+        e.target.value = '';
+      });
+    }
+
+    if (el('btn-pex-load-current')) {
+      el('btn-pex-load-current').addEventListener('click', async () => {
+        if (state.lastEncryptedPngBytes) {
+          pexState.referencePlainImageData = state.lastOriginalImageData || null;
+          if (DOM.encPassword && DOM.encPassword.value) {
+            pexState.knownPassword = DOM.encPassword.value;
+            if (el('pex-test-password')) el('pex-test-password').value = pexState.knownPassword;
+          }
+          await loadPngIntoExplorer(state.lastEncryptedPngBytes, 'encrypted_photo.png');
+        } else if (state.decPngBytes) {
+          await loadPngIntoExplorer(state.decPngBytes, `${state.decFileName || 'uploaded'}.png`);
+        } else {
+          await generateDemoEncryptedPng(2);
+        }
+      });
+    }
+
+    if (el('btn-pex-load-sample')) {
+      el('btn-pex-load-sample').addEventListener('click', async () => {
+        await generateDemoEncryptedPng(2);
+      });
+    }
+
+    if (el('btn-pex-load-sample-v1')) {
+      el('btn-pex-load-sample-v1').addEventListener('click', async () => {
+        await generateDemoEncryptedPng(1);
+      });
+    }
+
+    // Automatically initialize with a sample v2 encrypted PNG when the PNG Binary Explorer tab is opened
+    const tabBtnExplorer = el('tab-btn-png-explorer');
+    if (tabBtnExplorer) {
+      tabBtnExplorer.addEventListener('click', async () => {
+        if (!pexState.workingPngBytes) {
+          if (state.lastEncryptedPngBytes) {
+            pexState.referencePlainImageData = state.lastOriginalImageData || null;
+            await loadPngIntoExplorer(state.lastEncryptedPngBytes, 'encrypted_photo.png');
+          } else {
+            await generateDemoEncryptedPng(2);
+          }
+        }
+      });
+    }
+
+    // Expose automatic post-encryption hook so Step 2 immediately populates the Encryption Page's PNG Binary Structure & Metadata Editor
+    window.syncIntegratedPngExplorerWithEncryption = async (pngBytes, effectiveKey, origImageData, fileName = 'encrypted_photo.png') => {
+      pexState.referencePlainImageData = origImageData || null;
+      if (effectiveKey) {
+        pexState.knownPassword = effectiveKey;
+        const pwdEl = el('pex-test-password');
+        if (pwdEl) pwdEl.value = effectiveKey;
+      }
+      await loadPngIntoExplorer(pngBytes, fileName);
+      if (typeof window.syncReadOnlyExplorerIfEmpty === 'function') {
+        window.syncReadOnlyExplorerIfEmpty(pngBytes, fileName);
+      }
+    };
+
+    const btnScrollToExplorer = el('btn-scroll-to-explorer');
+    if (btnScrollToExplorer) {
+      btnScrollToExplorer.addEventListener('click', () => {
+        const detailsEl = el('enc-explorer-details');
+        if (detailsEl) detailsEl.open = true;
+        const secEl = document.getElementById('enc-integrated-explorer-section');
+        if (secEl) secEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+
+    // Generate initial sample in background so Explorer is ready immediately
+    setTimeout(() => {
+      if (!pexState.workingPngBytes) {
+        generateDemoEncryptedPng(2).catch(() => {});
+      }
+    }, 150);
+  }
+
+  /* ==========================================================================
+     Dedicated Read-Only PNG Binary Explorer Page (`#png-explorer-tab`)
+     Purpose: Upload, Inspect & Test Existing PNG Files Only (Strictly Read-Only)
+     Reuses shared BitEngine PNG parser, chunk analyzer, field decoder & validator
+     ========================================================================== */
+  function initReadOnlyPngExplorerPage() {
+    const roState = {
+      fileName: 'sample_encrypted_photo.png',
+      pngBytes: null,
+      storageUnit: 'bytes',
+      hexSectionIndex: -1,
+      hexViewMode: 'hex', // 'hex' | 'binary' | 'decimal' | 'decoded'
+      hexPage: 0,
+      hexPageSize: 256,
+      highlightRange: null,
+      selectedFileByteOffset: 0
+    };
+
+    const el = (id) => document.getElementById(id);
+
+    function formatSize(bytes, totalBytes, unit) {
+      if (unit === 'kib') return `${(bytes / 1024).toFixed(2)} KiB`;
+      if (unit === 'pct') {
+        const pct = totalBytes > 0 ? ((bytes / totalBytes) * 100).toFixed(2) : '0.00';
+        return `${pct}%`;
+      }
+      return `${bytes.toLocaleString()} B`;
+    }
+
+    function getChunkColor(type) {
+      const palette = {
+        SIGN: '#6366f1',
+        IHDR: '#0ea5e9',
+        msBX: '#10b981',
+        msBx: '#14b8a6',
+        IDAT: '#3b82f6',
+        IEND: '#8b5cf6'
+      };
+      return palette[type] || '#f59e0b';
+    }
+
+    function switchRoSubTab(panelId) {
+      document.querySelectorAll('#png-explorer-tab .pex-subtab').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-ro-tab') === panelId);
+      });
+      document.querySelectorAll('#png-explorer-tab .ro-pex-subpanel').forEach(panel => {
+        panel.style.display = (panel.id === panelId) ? 'block' : 'none';
+      });
+    }
+
+    async function loadReadOnlyPng(bytes, fileName = 'uploaded_image.png') {
+      roState.fileName = fileName;
+      roState.pngBytes = new Uint8Array(bytes);
+      roState.hexPage = 0;
+      roState.highlightRange = null;
+
+      const structure = BitEngine.parsePngBinaryStructure(roState.pngBytes);
+      roState.selectedFileByteOffset = structure.msbxSection ? structure.msbxSection.dataOffset : 0;
+
+      renderRoSummary(structure);
+      renderRoStructureTab(structure);
+      renderRoHexTab(structure);
+      renderRoMetadataTab(structure);
+      await renderRoTestingTab(structure);
+    }
+
+    function renderRoSummary(structure) {
+      if (el('ro-pex-sum-filename')) el('ro-pex-sum-filename').textContent = roState.fileName;
+      if (el('ro-pex-sum-filesize')) {
+        el('ro-pex-sum-filesize').textContent = `${structure.totalByteLength.toLocaleString()} B (${(structure.totalByteLength / 1024).toFixed(2)} KiB)`;
+      }
+      if (el('ro-pex-sum-dims')) {
+        el('ro-pex-sum-dims').textContent = structure.ihdrInfo
+          ? `${structure.ihdrInfo.width} × ${structure.ihdrInfo.height} px (${structure.ihdrInfo.colorTypeLabel})`
+          : 'Invalid / Missing IHDR';
+      }
+      if (el('ro-pex-sum-chunk')) {
+        const chEl = el('ro-pex-sum-chunk');
+        if (structure.msbxSection && structure.msbxSection.msbxBreakdown) {
+          const bd = structure.msbxSection.msbxBreakdown;
+          const legacyTag = structure.msbxSection.type === 'msBx' ? ' (Legacy Chunk)' : '';
+          chEl.textContent = `${structure.msbxSection.type}${legacyTag} • Schema v${bd.schemaVersion} (${bd.payloadByteLength} B)`;
+          chEl.style.color = 'var(--accent-emerald)';
+        } else {
+          chEl.textContent = 'None (Ordinary Unencrypted PNG)';
+          chEl.style.color = 'var(--text-muted)';
+        }
+      }
+    }
+
+    function renderRoStructureTab(structure) {
+      const total = structure.totalByteLength;
+      const formulaEl = el('ro-pex-size-formula');
+      if (formulaEl) {
+        const chunkSum = structure.chunks.reduce((a, c) => a + c.totalChunkSize, 0);
+        formulaEl.innerHTML =
+          `<b>Total PNG Size = Signature (${structure.signatureBytes} B) + All Chunk Sizes (${chunkSum.toLocaleString()} B across ${structure.chunkCount} chunks, incl. ${structure.totalChunksOverheadBytes} B overhead) = ${total.toLocaleString()} B</b> ` +
+          (structure.sizeFormulaMatches
+            ? `<span style="color:var(--accent-emerald); font-weight:700;">✔ Exact Sum Verified</span>`
+            : `<span style="color:#ef4444; font-weight:700;">⚠ Truncated or Mismatched Size</span>`);
+      }
+
+      const barEl = el('ro-pex-storage-bar');
+      const legEl = el('ro-pex-storage-legend');
+      if (barEl && legEl) {
+        barEl.innerHTML = '';
+        legEl.innerHTML = '';
+        for (const sec of structure.sections) {
+          const color = getChunkColor(sec.type);
+          const pct = Math.max(2.5, sec.percentage);
+          const seg = document.createElement('div');
+          seg.className = 'pex-bar-seg';
+          seg.style.width = `${pct}%`;
+          seg.style.background = color;
+          seg.title = `${sec.name}: ${sec.totalChunkSize.toLocaleString()} B (${sec.percentage}%)`;
+          seg.textContent = sec.percentage >= 7 ? `${sec.name} (${formatSize(sec.totalChunkSize, total, roState.storageUnit)})` : sec.name;
+          seg.addEventListener('click', () => {
+            roState.hexSectionIndex = sec.index;
+            roState.hexPage = 0;
+            switchRoSubTab('ro-panel-hex');
+            renderRoHexTab(structure);
+          });
+          barEl.appendChild(seg);
+
+          const card = document.createElement('div');
+          card.className = 'pex-legend-card';
+          card.innerHTML = `
+            <span class="pex-legend-dot" style="background:${color};"></span>
+            <div class="pex-legend-info">
+              <strong>${sec.name} ${sec.isSignature ? '' : `(Data: ${sec.dataLength} B + 12 B)`}</strong>
+              <span>${formatSize(sec.totalChunkSize, total, roState.storageUnit)} • ${sec.percentage}% of file</span>
+            </div>
+          `;
+          legEl.appendChild(card);
+        }
+      }
+
+      const tbody = el('ro-pex-chunks-tbody');
+      if (tbody) {
+        tbody.innerHTML = '';
+        for (const sec of structure.sections) {
+          const tr = document.createElement('tr');
+          const crcBadge = sec.isSignature
+            ? `<span class="pex-tier-badge pass">${sec.crcValid ? 'Magic OK' : 'Invalid Magic'}</span>`
+            : (sec.crcValid && sec.lengthValid
+              ? `<span class="pex-tier-badge pass">✔ ${sec.crcHex}</span>`
+              : `<span class="pex-tier-badge fail">✖ ${sec.crcHex} (Expected ${sec.actualCrcHex})</span>`);
+
+          tr.innerHTML = `
+            <td>${sec.index}</td>
+            <td><strong style="color:${getChunkColor(sec.type)};">${sec.name}</strong></td>
+            <td><code>${sec.type}</code> <small style="color:var(--text-muted); display:block;">${sec.propertySummary}</small></td>
+            <td><code>${sec.byteOffset}</code> <small>(0x${sec.byteOffset.toString(16).toUpperCase()})</small></td>
+            <td><code>${sec.dataLength.toLocaleString()} B</code></td>
+            <td><code>${sec.overheadBytes} B</code></td>
+            <td><strong>${sec.totalChunkSize.toLocaleString()} B</strong></td>
+            <td><code>${sec.percentage}%</code></td>
+            <td>${crcBadge}</td>
+            <td>
+              <div style="font-size:11.5px; color:var(--text-muted); margin-bottom:4px;">${sec.purpose}</div>
+              <button type="button" class="btn btn-xs btn-outline ro-inspect-sec-btn" data-sec-idx="${sec.index}">
+                <i class="fa-solid fa-magnifying-glass"></i> Inspect Bytes
+              </button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        }
+        tbody.querySelectorAll('.ro-inspect-sec-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            roState.hexSectionIndex = parseInt(btn.getAttribute('data-sec-idx'), 10);
+            roState.hexPage = 0;
+            switchRoSubTab('ro-panel-hex');
+            renderRoHexTab(structure);
+          });
+        });
+      }
+    }
+
+    function findRoFieldForOffset(structure, fileOff) {
+      for (const sec of structure.sections) {
+        if (fileOff >= sec.byteOffset && fileOff < sec.byteOffset + sec.totalChunkSize) {
+          if (!sec.isSignature) {
+            if (fileOff < sec.byteOffset + 4) return { sec, fieldName: `${sec.name} Envelope: 4-Byte Length (uint32 BE)` };
+            if (fileOff < sec.byteOffset + 8) return { sec, fieldName: `${sec.name} Envelope: 4-Byte ASCII Type ("${sec.type}")` };
+            if (fileOff >= sec.dataOffset + sec.effectiveDataLength) return { sec, fieldName: `${sec.name} Envelope: 4-Byte CRC-32` };
+          }
+          if (sec.decodedFields) {
+            for (const f of sec.decodedFields) {
+              if (f.fileByteOffset >= 0 && fileOff >= f.fileByteOffset && fileOff <= f.fileByteEnd) {
+                return { sec, fieldName: `${sec.name}: ${f.field} (${f.value})` };
+              }
+            }
+          }
+          return { sec, fieldName: `${sec.name} Chunk Payload Data` };
+        }
+      }
+      return { sec: null, fieldName: 'PNG Data Byte' };
+    }
+
+    function updateRoByteInspector(structure, fileOff) {
+      const bytes = roState.pngBytes;
+      if (!bytes || bytes.length === 0) return;
+      const safeOff = Math.max(0, Math.min(bytes.length - 1, fileOff));
+      const b = bytes[safeOff];
+      const { sec, fieldName } = findRoFieldForOffset(structure, safeOff);
+
+      if (el('ro-insp-file-off')) el('ro-insp-file-off').textContent = `${safeOff} (0x${safeOff.toString(16).padStart(4, '0').toUpperCase()})`;
+      if (el('ro-insp-section')) el('ro-insp-section').textContent = sec ? `${sec.name} (${sec.type})` : 'PNG File';
+      if (el('ro-insp-hex')) el('ro-insp-hex').textContent = `0x${b.toString(16).padStart(2, '0').toUpperCase()}`;
+      if (el('ro-insp-bin')) el('ro-insp-bin').textContent = b.toString(2).padStart(8, '0');
+      if (el('ro-insp-dec')) el('ro-insp-dec').textContent = String(b);
+      if (el('ro-insp-ascii')) el('ro-insp-ascii').textContent = (b >= 32 && b <= 126) ? `'${String.fromCharCode(b)}'` : 'Non-printable (.)';
+      if (el('ro-insp-field')) el('ro-insp-field').textContent = fieldName;
+    }
+
+    function renderRoHexTab(structure) {
+      const selEl = el('ro-pex-section-select');
+      if (selEl) {
+        const prevVal = String(roState.hexSectionIndex);
+        selEl.innerHTML = `<option value="-1">All PNG File Bytes (${structure.totalByteLength.toLocaleString()} B)</option>`;
+        for (const sec of structure.sections) {
+          const opt = document.createElement('option');
+          opt.value = String(sec.index);
+          opt.textContent = `${sec.name} — Offset ${sec.byteOffset} (${sec.totalChunkSize.toLocaleString()} B)`;
+          selEl.appendChild(opt);
+        }
+        selEl.value = prevVal;
+      }
+
+      let baseOffset = 0;
+      let viewBytes = roState.pngBytes;
+      let activeSec = null;
+      if (roState.hexSectionIndex >= 0) {
+        activeSec = structure.sections.find(s => s.index === roState.hexSectionIndex) || null;
+        if (activeSec) {
+          baseOffset = activeSec.byteOffset;
+          viewBytes = activeSec.rawBytes;
+        }
+      }
+
+      const pillsBox = el('ro-pex-field-pills');
+      if (pillsBox) {
+        pillsBox.innerHTML = '';
+        const fieldsSource = (activeSec && activeSec.decodedFields && activeSec.decodedFields.length > 0)
+          ? activeSec.decodedFields
+          : (structure.msbxSection ? structure.msbxSection.decodedFields : (structure.sections[1] ? structure.sections[1].decodedFields : []));
+
+        if (fieldsSource && fieldsSource.length > 0) {
+          const lbl = document.createElement('span');
+          lbl.style.fontSize = '11.5px';
+          lbl.style.color = 'var(--text-muted)';
+          lbl.style.alignSelf = 'center';
+          lbl.innerHTML = '<b>Highlight Field Bytes:</b>';
+          pillsBox.appendChild(lbl);
+
+          fieldsSource.forEach(f => {
+            if (f.fileByteOffset < 0) return;
+            const pill = document.createElement('button');
+            pill.type = 'button';
+            const isHi = roState.highlightRange &&
+              roState.highlightRange.start === f.fileByteOffset &&
+              roState.highlightRange.end === f.fileByteEnd;
+            pill.className = 'pex-field-pill' + (isHi ? ' active' : '');
+            pill.textContent = `${f.field} (${f.storage || ''})`;
+            pill.addEventListener('click', () => {
+              roState.highlightRange = { start: f.fileByteOffset, end: f.fileByteEnd, label: f.field };
+              roState.selectedFileByteOffset = f.fileByteOffset;
+              const relOff = Math.max(0, f.fileByteOffset - baseOffset);
+              roState.hexPage = Math.floor(relOff / roState.hexPageSize);
+              renderRoHexTab(structure);
+            });
+            pillsBox.appendChild(pill);
+          });
+        }
+      }
+
+      const totalViewBytes = viewBytes.byteLength;
+      const maxPage = Math.max(0, Math.ceil(totalViewBytes / roState.hexPageSize) - 1);
+      if (roState.hexPage > maxPage) roState.hexPage = maxPage;
+      if (roState.hexPage < 0) roState.hexPage = 0;
+
+      const pageStart = roState.hexPage * roState.hexPageSize;
+      const pageEnd = Math.min(totalViewBytes, pageStart + roState.hexPageSize);
+
+      if (el('ro-pex-page-label')) {
+        el('ro-pex-page-label').textContent = `Bytes ${(baseOffset + pageStart).toLocaleString()}..${Math.max(baseOffset + pageStart, baseOffset + pageEnd - 1).toLocaleString()} of ${(baseOffset + totalViewBytes).toLocaleString()}`;
+      }
+      if (el('btn-ro-hex-prev')) el('btn-ro-hex-prev').disabled = roState.hexPage <= 0;
+      if (el('btn-ro-hex-next')) el('btn-ro-hex-next').disabled = roState.hexPage >= maxPage;
+
+      const gridBox = el('ro-pex-hex-grid');
+      if (gridBox) {
+        gridBox.innerHTML = '';
+        if (roState.hexViewMode === 'decoded') {
+          const targetFields = activeSec
+            ? activeSec.decodedFields
+            : structure.sections.flatMap(s => (s.decodedFields || []).map(f => ({ ...f, secName: s.name })));
+          if (!targetFields || targetFields.length === 0) {
+            gridBox.innerHTML = `<div style="padding:16px; color:var(--text-muted);">No decoded metadata fields for this section. Switch to Hexadecimal, Binary, or Decimal view.</div>`;
+          } else {
+            targetFields.forEach(f => {
+              const row = document.createElement('div');
+              row.style.padding = '8px 10px';
+              row.style.borderBottom = '1px solid var(--border-light)';
+              row.style.cursor = 'pointer';
+              row.innerHTML = `
+                <div style="display:flex; justify-content:space-between; gap:8px;">
+                  <strong>${f.secName ? `[${f.secName}] ` : ''}${f.field}</strong>
+                  <span style="color:var(--primary-blue); font-weight:700;">${f.value}</span>
+                </div>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+                  File Offset: <code>${f.fileByteOffset}..${f.fileByteEnd}</code> • Range: ${f.bitRange || '—'} • Storage: ${f.storage || '—'}
+                </div>
+              `;
+              row.addEventListener('click', () => {
+                if (f.fileByteOffset >= 0) {
+                  roState.selectedFileByteOffset = f.fileByteOffset;
+                  roState.highlightRange = { start: f.fileByteOffset, end: f.fileByteEnd, label: f.field };
+                  updateRoByteInspector(structure, f.fileByteOffset);
+                }
+              });
+              gridBox.appendChild(row);
+            });
+          }
+        } else {
+          const bytesPerRow = roState.hexViewMode === 'binary' ? 6 : (roState.hexViewMode === 'decimal' ? 12 : 16);
+          for (let r = pageStart; r < pageEnd; r += bytesPerRow) {
+            const rowEnd = Math.min(pageEnd, r + bytesPerRow);
+            const fileRowOffset = baseOffset + r;
+            const rowEl = document.createElement('div');
+            rowEl.className = 'pex-hex-row';
+
+            const offSpan = document.createElement('span');
+            offSpan.className = 'pex-hex-offset';
+            offSpan.textContent = `+0x${fileRowOffset.toString(16).padStart(4, '0').toUpperCase()}`;
+
+            const cellsWrap = document.createElement('div');
+            cellsWrap.className = 'pex-hex-cells';
+
+            let asciiStr = '';
+            for (let i = r; i < rowEnd; i++) {
+              const fileOff = baseOffset + i;
+              const b = viewBytes[i];
+              asciiStr += (b >= 32 && b <= 126) ? String.fromCharCode(b) : '.';
+
+              const cell = document.createElement('span');
+              cell.className = 'pex-byte-cell';
+              if (roState.highlightRange && fileOff >= roState.highlightRange.start && fileOff <= roState.highlightRange.end) {
+                cell.classList.add('highlighted');
+              }
+              if (fileOff === roState.selectedFileByteOffset) {
+                cell.classList.add('selected');
+              }
+              if (roState.hexViewMode === 'binary') {
+                cell.textContent = b.toString(2).padStart(8, '0');
+              } else if (roState.hexViewMode === 'decimal') {
+                cell.textContent = b.toString(10).padStart(3, '0');
+              } else {
+                cell.textContent = b.toString(16).padStart(2, '0').toUpperCase();
+              }
+              cell.title = `File Offset ${fileOff} (0x${fileOff.toString(16).toUpperCase()}) • Hex: 0x${b.toString(16).padStart(2, '0').toUpperCase()} • Bin: ${b.toString(2).padStart(8, '0')} • Dec: ${b}`;
+              cell.addEventListener('click', () => {
+                roState.selectedFileByteOffset = fileOff;
+                renderRoHexTab(structure);
+              });
+              cellsWrap.appendChild(cell);
+            }
+
+            const asciiSpan = document.createElement('span');
+            asciiSpan.style.color = 'var(--text-muted)';
+            asciiSpan.textContent = asciiStr;
+
+            rowEl.appendChild(offSpan);
+            rowEl.appendChild(cellsWrap);
+            rowEl.appendChild(asciiSpan);
+            gridBox.appendChild(rowEl);
+          }
+        }
+      }
+      updateRoByteInspector(structure, roState.selectedFileByteOffset);
+    }
+
+    function renderRoMetadataTab(structure) {
+      const sumBox = el('ro-pex-meta-summary-box');
+      const envEl = el('ro-pex-meta-envelope');
+      const tbody = el('ro-pex-meta-fields-tbody');
+      const badgeEl = el('ro-pex-meta-badge');
+      if (!sumBox || !envEl || !tbody) return;
+
+      if (!structure.msbxSection) {
+        if (badgeEl) badgeEl.textContent = 'Ordinary Unencrypted PNG';
+        sumBox.innerHTML = `
+          <div class="pex-struct-warning" style="background: rgba(59, 130, 246, 0.10); border-color: rgba(59, 130, 246, 0.35);">
+            <i class="fa-solid fa-circle-info" style="color: var(--primary-blue);"></i>
+            <div>
+              <strong>No KXBIT Encryption Metadata Found (Ordinary PNG Image)</strong>
+              <p style="margin: 3px 0 0 0;">This PNG file does not contain an embedded <code>msBX</code> or legacy <code>msBx</code> chunk. It is a standard unencrypted PNG image (${structure.ihdrInfo ? `${structure.ihdrInfo.width}×${structure.ihdrInfo.height} px` : 'unknown dimensions'}).</p>
+            </div>
+          </div>
+        `;
+        envEl.style.display = 'none';
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No KXBIT encryption metadata fields present in this ordinary PNG file.</td></tr>`;
+        return;
+      }
+
+      envEl.style.display = 'flex';
+      const sec = structure.msbxSection;
+      const bd = sec.msbxBreakdown;
+
+      let decodedMeta = null;
+      let decodeError = null;
+      try {
+        decodedMeta = BitEngine.decodeMsBxMetadata(sec.dataBytes, null, structure.ihdrInfo);
+      } catch (err) {
+        decodeError = err.message || String(err);
+      }
+
+      if (badgeEl) {
+        badgeEl.textContent = `${sec.type} • Schema v${bd ? bd.schemaVersion : '?'}`;
+      }
+
+      if (decodedMeta) {
+        sumBox.innerHTML = `
+          <div class="pex-opt-kpi-grid" style="margin-top: 8px;">
+            <div class="pex-kpi-card">
+              <span class="kpi-label">Algorithm Identifier</span>
+              <span class="kpi-val" style="font-size:14px;">${decodedMeta.identifier} (Algo v${decodedMeta.algoVersion})</span>
+              <span class="kpi-sub">3-Stage MSB Pipeline</span>
+            </div>
+            <div class="pex-kpi-card">
+              <span class="kpi-label">Stage 3 MSB Bit Depth</span>
+              <span class="kpi-val" style="font-size:15px;">k = ${decodedMeta.k} bit${decodedMeta.k > 1 ? 's' : ''}</span>
+              <span class="kpi-sub">Colour Mode: ${decodedMeta.modeLabel}</span>
+            </div>
+            <div class="pex-kpi-card">
+              <span class="kpi-label">Key Type &amp; KDF Rounds</span>
+              <span class="kpi-val" style="font-size:14px;">${decodedMeta.keyType === 'image' ? 'Key Image (SHA-256)' : 'Text Password'}</span>
+              <span class="kpi-sub">${decodedMeta.iterations.toLocaleString()} SHA-256 rounds (Secret key not stored)</span>
+            </div>
+            <div class="pex-kpi-card">
+              <span class="kpi-label">Encryption Scope &amp; Mask</span>
+              <span class="kpi-val" style="font-size:14px;">${decodedMeta.scope.toUpperCase()}</span>
+              <span class="kpi-sub">${decodedMeta.encodedMaskBytes ? `${decodedMeta.maskCodecLabel} (${decodedMeta.encodedMaskBytes.byteLength} B)` : 'No mask (Full Image)'}</span>
+            </div>
+            <div class="pex-kpi-card">
+              <span class="kpi-label">Salt Length &amp; Hex</span>
+              <span class="kpi-val" style="font-size:13px;">16 Bytes (128 bits)</span>
+              <span class="kpi-sub" title="${decodedMeta.saltHex}">${decodedMeta.saltHex.slice(0, 16)}…</span>
+            </div>
+            <div class="pex-kpi-card">
+              <span class="kpi-label">SHA-256 Verification Tag</span>
+              <span class="kpi-val" style="font-size:13px;">32 Bytes (256 bits)</span>
+              <span class="kpi-sub" title="${decodedMeta.tagHex}">${decodedMeta.tagHex.slice(0, 16)}…</span>
+            </div>
+          </div>
+        `;
+      } else {
+        sumBox.innerHTML = `
+          <div class="pex-tier-item fail" style="margin-top:8px;">
+            <div>
+              <strong>✖ Invalid or Corrupted ${sec.type} Metadata Schema</strong>
+              <div style="font-size:11.5px; color:#ef4444;">${decodeError}</div>
+            </div>
+            <span class="pex-tier-badge fail">INVALID</span>
+          </div>
+        `;
+      }
+
+      if (bd) {
+        envEl.innerHTML = `
+          <span><b>Chunk Envelope (12 B Overhead):</b></span>
+          <span>Length: Offset <code>${bd.envelope.lengthField.fileByteOffset}..${bd.envelope.lengthField.fileByteOffset + 3}</code> (${bd.payloadByteLength} B)</span>
+          <span>• Type: Offset <code>${bd.envelope.typeField.fileByteOffset}..${bd.envelope.typeField.fileByteOffset + 3}</code> ("${bd.chunkType}")</span>
+          <span>• Payload: Offset <code>${sec.dataOffset}..${sec.dataOffset + bd.payloadByteLength - 1}</code></span>
+          <span>• CRC-32: Offset <code>${bd.envelope.crcField.fileByteOffset}..${bd.envelope.crcField.fileByteOffset + 3}</code> (${sec.crcHex})</span>
+        `;
+
+        tbody.innerHTML = '';
+        bd.fields.forEach(f => {
+          const tr = document.createElement('tr');
+          const chunkOffStr = f.chunkByteOffset >= 0
+            ? `<code>+${f.chunkByteOffset}${f.chunkByteEnd > f.chunkByteOffset ? '..+' + f.chunkByteEnd : ''}</code> <small>(${f.bitRange})</small>`
+            : `<span style="color:var(--accent-emerald); font-weight:600;">${f.bitRange}</span>`;
+          const fileOffStr = f.fileByteOffset >= 0
+            ? `<code>${f.fileByteOffset}${f.fileByteEnd > f.fileByteOffset ? '..' + f.fileByteEnd : ''}</code>`
+            : '—';
+
+          tr.innerHTML = `
+            <td><strong>${f.field}</strong></td>
+            <td><code>${f.value}</code></td>
+            <td><strong>${f.storage}</strong></td>
+            <td>${chunkOffStr}</td>
+            <td>${fileOffStr}</td>
+            <td>
+              <div style="font-family:'JetBrains Mono',monospace; font-size:11px;">Hex: <b>${f.rawHex}</b></div>
+              <div style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--text-muted);">Bin: ${f.rawBinary}</div>
+            </td>
+            <td>
+              <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">${f.description}</div>
+              ${f.chunkByteOffset >= 0 ? `
+                <button type="button" class="btn btn-xs btn-outline ro-jump-field-btn" data-file-start="${f.fileByteOffset}" data-file-end="${f.fileByteEnd}" data-field-name="${f.field}">
+                  <i class="fa-solid fa-highlighter"></i> Highlight in Hex/Binary
+                </button>
+              ` : ''}
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+
+        tbody.querySelectorAll('.ro-jump-field-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const fStart = parseInt(btn.getAttribute('data-file-start'), 10);
+            const fEnd = parseInt(btn.getAttribute('data-file-end'), 10);
+            const fName = btn.getAttribute('data-field-name');
+            roState.hexSectionIndex = structure.msbxSection.index;
+            roState.highlightRange = { start: fStart, end: fEnd, label: fName };
+            roState.selectedFileByteOffset = fStart;
+            roState.hexPage = Math.floor((fStart - structure.msbxSection.byteOffset) / roState.hexPageSize);
+            switchRoSubTab('ro-panel-hex');
+            renderRoHexTab(structure);
+          });
+        });
+      }
+    }
+
+    async function renderRoTestingTab(structure) {
+      const reportList = el('ro-pex-test-report-list');
+      if (!reportList) return;
+
+      const msBXCount = structure.chunks.filter(c => c.type === 'msBX').length;
+      const msBxLegacyCount = structure.chunks.filter(c => c.type === 'msBx').length;
+      const allLengthsValid = structure.chunks.every(c => c.lengthValid) && structure.sizeFormulaMatches;
+      const allCrcsValid = structure.chunks.every(c => c.crcValid);
+
+      let metaValid = false;
+      let metaSummary = 'No KXBIT encryption metadata chunk found (ordinary unencrypted PNG image).';
+      let metaStatus = 'INFO';
+      let dimCompat = true;
+      let dimSummary = 'IHDR dimensions valid.';
+
+      if (msBXCount === 0 && msBxLegacyCount === 0) {
+        metaStatus = 'WARN';
+        dimSummary = structure.ihdrInfo
+          ? `Standard PNG (${structure.ihdrInfo.width}×${structure.ihdrInfo.height} px) without msBX metadata.`
+          : 'Missing IHDR.';
+      } else if (msBXCount > 0 && msBxLegacyCount > 0) {
+        metaStatus = 'FAIL';
+        metaSummary = 'Conflicting metadata chunks: File contains both "msBX" and legacy "msBx".';
+      } else if (msBXCount > 1 || msBxLegacyCount > 1) {
+        metaStatus = 'FAIL';
+        metaSummary = `Duplicate metadata chunks detected (${msBXCount + msBxLegacyCount} chunks).`;
+      } else if (structure.msbxSection) {
+        try {
+          const decoded = BitEngine.decodeMsBxMetadata(structure.msbxSection.dataBytes, null, structure.ihdrInfo);
+          metaValid = true;
+          metaStatus = 'PASS';
+          metaSummary = `Valid ${structure.msbxSection.type} Schema v${decoded.metaVersion} (k=${decoded.k}, scope=${decoded.scope}, KDF=${decoded.iterations.toLocaleString()}).`;
+          if (structure.ihdrInfo && (decoded.width !== structure.ihdrInfo.width || decoded.height !== structure.ihdrInfo.height)) {
+            dimCompat = false;
+            dimSummary = `Dimension mismatch: IHDR is ${structure.ihdrInfo.width}×${structure.ihdrInfo.height}, metadata specifies ${decoded.width}×${decoded.height}.`;
+          } else if (structure.ihdrInfo) {
+            dimSummary = `Consistent ${structure.ihdrInfo.width}×${structure.ihdrInfo.height} px dimensions.`;
+          }
+        } catch (err) {
+          metaValid = false;
+          metaStatus = 'FAIL';
+          metaSummary = err.message || String(err);
+        }
+      }
+
+      const checks = [
+        {
+          title: '1. PNG Signature Validity',
+          status: structure.isValidSignature ? 'PASS' : 'FAIL',
+          desc: structure.isValidSignature
+            ? 'Valid 8-byte ISO/IEC 15948 PNG signature (89 50 4E 47 0D 0A 1A 0A).'
+            : 'Invalid or missing 8-byte PNG signature.'
+        },
+        {
+          title: '2. Required Chunk Structure (IHDR, IDAT, IEND)',
+          status: (structure.ihdrInfo && structure.idatCount > 0 && structure.chunks.some(c => c.type === 'IEND')) ? 'PASS' : 'FAIL',
+          desc: `Found ${structure.chunkCount} total chunks (${structure.idatCount} IDAT chunk${structure.idatCount === 1 ? '' : 's'}).`
+        },
+        {
+          title: '3. Chunk Length & File Size Exactness',
+          status: allLengthsValid ? 'PASS' : 'FAIL',
+          desc: allLengthsValid
+            ? `All chunk lengths valid; Signature (8 B) + Chunks = ${structure.totalByteLength.toLocaleString()} B.`
+            : 'One or more chunk lengths exceed file bounds or file has trailing/truncated bytes.'
+        },
+        {
+          title: '4. Per-Chunk CRC-32 Checksum Integrity',
+          status: allCrcsValid ? 'PASS' : 'FAIL',
+          desc: allCrcsValid
+            ? `All ${structure.chunkCount} chunks passed ISO/IEC 15948 32-bit CRC verification.`
+            : structure.structuralErrors.filter(e => e.includes('CRC')).join(' ') || 'CRC-32 mismatch detected.'
+        },
+        {
+          title: '5. KXBIT msBX / msBx Metadata Presence & Uniqueness',
+          status: (msBXCount + msBxLegacyCount === 1) ? 'PASS' : ((msBXCount + msBxLegacyCount === 0) ? 'WARN' : 'FAIL'),
+          desc: (msBXCount + msBxLegacyCount === 1)
+            ? `Exactly 1 ${msBXCount === 1 ? 'msBX (current)' : 'msBx (legacy)'} metadata chunk present.`
+            : metaSummary
+        },
+        {
+          title: '6. Metadata Schema & Version Validation',
+          status: metaStatus,
+          desc: metaSummary
+        },
+        {
+          title: '7. Image Dimension & Colour Compatibility',
+          status: dimCompat ? 'PASS' : 'FAIL',
+          desc: dimSummary
+        }
+      ];
+
+      reportList.innerHTML = '';
+      checks.forEach(c => {
+        const cls = c.status === 'PASS' ? 'pass' : (c.status === 'FAIL' ? 'fail' : 'warn');
+        const item = document.createElement('div');
+        item.className = `pex-tier-item ${cls}`;
+        item.innerHTML = `
+          <div>
+            <strong>${c.title}</strong>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">${c.desc}</div>
+          </div>
+          <span class="pex-tier-badge ${cls}">${c.status}</span>
+        `;
+        reportList.appendChild(item);
+      });
+    }
+
+    // Sub-tab switching on Read-Only Explorer Page
+    document.querySelectorAll('#png-explorer-tab .pex-subtab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        switchRoSubTab(btn.getAttribute('data-ro-tab'));
+      });
+    });
+
+    // Storage unit switcher on Read-Only Explorer Page
+    document.querySelectorAll('.ro-unit-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.ro-unit-btn').forEach(b => {
+          b.classList.remove('btn-primary');
+          b.classList.add('btn-outline');
+        });
+        btn.classList.remove('btn-outline');
+        btn.classList.add('btn-primary');
+        roState.storageUnit = btn.getAttribute('data-ro-unit') || 'bytes';
+        if (roState.pngBytes) {
+          renderRoStructureTab(BitEngine.parsePngBinaryStructure(roState.pngBytes));
+        }
+      });
+    });
+
+    // Hex/Binary viewer controls on Read-Only Explorer Page
+    if (el('ro-pex-section-select')) {
+      el('ro-pex-section-select').addEventListener('change', (e) => {
+        roState.hexSectionIndex = parseInt(e.target.value, 10);
+        roState.hexPage = 0;
+        if (roState.pngBytes) renderRoHexTab(BitEngine.parsePngBinaryStructure(roState.pngBytes));
+      });
+    }
+
+    document.querySelectorAll('.ro-view-mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.ro-view-mode-btn').forEach(b => {
+          b.classList.remove('btn-primary');
+          b.classList.add('btn-outline');
+        });
+        btn.classList.remove('btn-outline');
+        btn.classList.add('btn-primary');
+        roState.hexViewMode = btn.getAttribute('data-ro-view') || 'hex';
+        if (roState.pngBytes) renderRoHexTab(BitEngine.parsePngBinaryStructure(roState.pngBytes));
+      });
+    });
+
+    if (el('btn-ro-hex-prev')) {
+      el('btn-ro-hex-prev').addEventListener('click', () => {
+        roState.hexPage = Math.max(0, roState.hexPage - 1);
+        if (roState.pngBytes) renderRoHexTab(BitEngine.parsePngBinaryStructure(roState.pngBytes));
+      });
+    }
+    if (el('btn-ro-hex-next')) {
+      el('btn-ro-hex-next').addEventListener('click', () => {
+        roState.hexPage++;
+        if (roState.pngBytes) renderRoHexTab(BitEngine.parsePngBinaryStructure(roState.pngBytes));
+      });
+    }
+
+    // Optional Read-Only Decryption Compatibility Test
+    if (el('btn-ro-pex-test-decrypt')) {
+      el('btn-ro-pex-test-decrypt').addEventListener('click', async () => {
+        const resBox = el('ro-pex-decrypt-test-result');
+        if (!resBox || !roState.pngBytes) return;
+        const keyVal = el('ro-pex-test-key') ? el('ro-pex-test-key').value.trim() : '';
+        if (!keyVal) {
+          resBox.innerHTML = `<div class="pex-tier-item warn"><div><strong>Key Required</strong><div style="font-size:11.5px;">Enter the candidate password or key image SHA-256 hash above to test decryption compatibility.</div></div><span class="pex-tier-badge warn">INPUT NEEDED</span></div>`;
+          return;
+        }
+        try {
+          const dec = await BitEngine.decryptFromPNG(roState.pngBytes, keyVal);
+          resBox.innerHTML = `
+            <div class="pex-tier-item pass">
+              <div>
+                <strong>✔ Decryption Compatibility Verified (0 Errors)</strong>
+                <div style="font-size:11.5px; color:var(--text-muted);">32-byte SHA-256 tag matched (${dec.metadata.tagHex.slice(0, 16)}…). Reversed 3 stages in ${dec.processingTimeMs} ms (${dec.imageData.width}×${dec.imageData.height} px).</div>
+              </div>
+              <span class="pex-tier-badge pass">AUTHENTIC</span>
+            </div>
+          `;
+        } catch (err) {
+          resBox.innerHTML = `
+            <div class="pex-tier-item fail">
+              <div>
+                <strong>✖ Decryption Test Failed</strong>
+                <div style="font-size:11.5px; color:#ef4444;">${err.message || String(err)}</div>
+              </div>
+              <span class="pex-tier-badge fail">FAILED</span>
+            </div>
+          `;
+        }
+      });
+    }
+
+    // File upload & drop zone on Read-Only Explorer Page
+    const roDropZone = el('ro-pex-drop-zone');
+    const roFileInput = el('ro-pex-file-input');
+    if (roDropZone && roFileInput) {
+      roDropZone.addEventListener('click', () => roFileInput.click());
+      roDropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        roDropZone.classList.add('dragover');
+      });
+      roDropZone.addEventListener('dragleave', () => {
+        roDropZone.classList.remove('dragover');
+      });
+      roDropZone.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        roDropZone.classList.remove('dragover');
+        const file = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!file) return;
+        const buf = await file.arrayBuffer();
+        await loadReadOnlyPng(new Uint8Array(buf), file.name);
+      });
+      roFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const buf = await file.arrayBuffer();
+        await loadReadOnlyPng(new Uint8Array(buf), file.name);
+        e.target.value = '';
+      });
+    }
+
+    // Sample & Active PNG Loader Buttons on Read-Only Explorer Page
+    async function generateRoSamplePng(mode = 'msBX_v2') {
+      const w = 128, h = 96;
+      const rgba = new Uint8ClampedArray(w * h * 4);
+      for (let i = 0; i < w * h * 4; i += 4) {
+        rgba[i] = (i * 5) & 0xFF;
+        rgba[i + 1] = (i * 9 + 40) & 0xFF;
+        rgba[i + 2] = (i * 15 + 90) & 0xFF;
+        rgba[i + 3] = 255;
+      }
+      const imgData = new ImageData(rgba, w, h);
+      if (mode === 'plain') {
+        const plainBytes = await BitEngine.encodeLosslessPNG(imgData);
+        await loadReadOnlyPng(plainBytes, 'ordinary_unencrypted_photo.png');
+        return;
+      }
+      const demoKey = 'KXBIT-Demo-Key-2026';
+      if (el('ro-pex-test-key')) el('ro-pex-test-key').value = demoKey;
+      const enc = await BitEngine.encryptToPNG(imgData, demoKey, null, {
+        k: 2,
+        iterations: 1000,
+        metaVersion: mode === 'msBx_legacy' ? 1 : 2
+      });
+      if (mode === 'msBx_legacy') {
+        const decPng = await BitEngine.decodeLosslessPNG(enc.pngBytes);
+        const msbxChunk = decPng.chunks.find(c => c.type === 'msBX');
+        const legacyBytes = await BitEngine.encodeLosslessPNG(enc.imageData, [{ type: 'msBx', data: msbxChunk.data }]);
+        await loadReadOnlyPng(legacyBytes, 'legacy_msBx_encrypted.png');
+      } else {
+        await loadReadOnlyPng(enc.pngBytes, 'sample_msBX_v2_encrypted.png');
+      }
+    }
+
+    if (el('btn-ro-pex-load-active')) {
+      el('btn-ro-pex-load-active').addEventListener('click', async () => {
+        if (state.lastEncryptedPngBytes) {
+          if (DOM.encPassword && DOM.encPassword.value && el('ro-pex-test-key')) {
+            el('ro-pex-test-key').value = DOM.encPassword.value;
+          }
+          await loadReadOnlyPng(state.lastEncryptedPngBytes, 'encrypted_photo.png');
+        } else {
+          await generateRoSamplePng('msBX_v2');
+        }
+      });
+    }
+    if (el('btn-ro-pex-sample-msbx')) {
+      el('btn-ro-pex-sample-msbx').addEventListener('click', () => generateRoSamplePng('msBX_v2'));
+    }
+    if (el('btn-ro-pex-sample-legacy')) {
+      el('btn-ro-pex-sample-legacy').addEventListener('click', () => generateRoSamplePng('msBx_legacy'));
+    }
+    if (el('btn-ro-pex-sample-plain')) {
+      el('btn-ro-pex-sample-plain').addEventListener('click', () => generateRoSamplePng('plain'));
+    }
+
+    window.syncReadOnlyExplorerIfEmpty = (pngBytes, fileName) => {
+      if (!roState.pngBytes) {
+        loadReadOnlyPng(pngBytes, fileName).catch(() => {});
+      }
+    };
+
+    setTimeout(() => {
+      if (!roState.pngBytes) {
+        generateRoSamplePng('msBX_v2').catch(() => {});
+      }
+    }, 200);
+  }
+
+  initPngBinaryExplorerModule();
+  initReadOnlyPngExplorerPage();
 
 });

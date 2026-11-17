@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FYP Image Security & Steganography Suite (MSB)</title>
-  <meta name="description" content="Final Year Project - Image Security Suite supporting MSB Bit-Swap Encryption, Password Security, Steganography, and Image Format Conversion.">
+  <title>KXBIT PLATFORM</title>
+  <meta name="description" content="KXBIT PLATFORM - Image Security Suite supporting MSB Bit-Swap Encryption, Password Security, Steganography, and Image Format Conversion.">
+  <link rel="icon" type="image/png" href="KXBit%20Monogram.png">
   
   <!-- Fonts & Icons -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,7 +13,17 @@
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
-  <link rel="stylesheet" href="style.css?v=20261106_3">
+  <link rel="stylesheet" href="style.css?v=20261118_1">
+  <script>
+    (function() {
+      try {
+        var savedTheme = localStorage.getItem('kxbit-theme');
+        if (savedTheme === 'dark' || savedTheme === 'light') {
+          document.documentElement.setAttribute('data-theme', savedTheme);
+        }
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
   <div class="app-container">
@@ -20,35 +31,45 @@
     <header class="app-header">
       <div class="logo-area">
         <div class="logo-icon">
-          <i class="fa-solid fa-shield-halved"></i>
+          <img src="KXBit%20Monogram.png" alt="KXBIT Logo" class="logo-img">
         </div>
         <div class="logo-text">
-          <h1>BitShield <span class="badge-fyp">FYP Security Suite</span></h1>
-          <p>MSB Bit-Level Image Encryption & Steganography Platform</p>
+          <h1><span class="brand-wordmark"><span class="brand-kx">KX</span><span class="brand-bit">BIT</span></span> <span class="badge-fyp">PLATFORM</span></h1>
         </div>
       </div>
       
-      <!-- Navigation Tabs -->
-      <nav class="nav-tabs" role="tablist">
-        <button class="nav-tab active" data-tab="encrypt-tab" id="tab-btn-encrypt">
-          <i class="fa-solid fa-lock"></i> Encrypt / Scramble
+      <div class="header-right">
+        <!-- Navigation Tabs -->
+        <nav class="nav-tabs" role="tablist">
+          <button class="nav-tab active" data-tab="encrypt-tab" id="tab-btn-encrypt">
+            <i class="fa-solid fa-lock"></i> Encrypt / Scramble
+          </button>
+          <button class="nav-tab" data-tab="decrypt-tab" id="tab-btn-decrypt">
+            <i class="fa-solid fa-key"></i> Decrypt / Restore
+          </button>
+          <button class="nav-tab" data-tab="video-enc-tab" id="tab-btn-video-enc">
+            <i class="fa-solid fa-film"></i> Encrypt Video
+          </button>
+          <button class="nav-tab" data-tab="video-dec-tab" id="tab-btn-video-dec">
+            <i class="fa-solid fa-unlock-keyhole"></i> Decrypt Video
+          </button>
+          <button class="nav-tab" data-tab="png-explorer-tab" id="tab-btn-png-explorer">
+            <i class="fa-solid fa-microchip"></i> PNG Binary Explorer
+          </button>
+          <button class="nav-tab" data-tab="stego-tab" id="tab-btn-stego">
+            <i class="fa-solid fa-user-ninja"></i> Invisible Steganography
+          </button>
+          <button class="nav-tab" data-tab="methodology-tab" id="tab-btn-methodology">
+            <i class="fa-solid fa-book-bookmark"></i> FYP Theory & Math
+          </button>
+        </nav>
+
+        <!-- Theme Toggle Button (Light / Dark Mode) -->
+        <button class="theme-toggle-btn" id="btn-theme-toggle" type="button" aria-label="Switch between Light Mode and Dark Mode" title="Toggle Dark / Light Mode">
+          <i class="fa-solid fa-moon" id="theme-toggle-icon"></i>
+          <span id="theme-toggle-label">Dark Mode</span>
         </button>
-        <button class="nav-tab" data-tab="decrypt-tab" id="tab-btn-decrypt">
-          <i class="fa-solid fa-key"></i> Decrypt / Restore
-        </button>
-        <button class="nav-tab" data-tab="video-enc-tab" id="tab-btn-video-enc">
-          <i class="fa-solid fa-film"></i> Encrypt Video
-        </button>
-        <button class="nav-tab" data-tab="video-dec-tab" id="tab-btn-video-dec">
-          <i class="fa-solid fa-unlock-keyhole"></i> Decrypt Video
-        </button>
-        <button class="nav-tab" data-tab="stego-tab" id="tab-btn-stego">
-          <i class="fa-solid fa-user-ninja"></i> Invisible Steganography
-        </button>
-        <button class="nav-tab" data-tab="methodology-tab" id="tab-btn-methodology">
-          <i class="fa-solid fa-book-bookmark"></i> FYP Theory & Math
-        </button>
-      </nav>
+      </div>
     </header>
 
     <!-- Main Content Body -->
@@ -66,7 +87,7 @@
               <input type="file" id="enc-file-input" accept="image/png,image/bmp,image/*" class="file-input">
               <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
               <p class="drop-text">Drag & drop your original PNG / BMP image here or <span>Browse</span></p>
-              <p class="drop-subtext">Supports PNG, BMP, WEBP, JPEG • Produces a portable <b>.msbx</b> encrypted container</p>
+              <p class="drop-subtext">Supports PNG, BMP, WEBP, JPEG • Generates a Self-Describing Encrypted PNG (<b>encrypted_photo.png</b>)</p>
             </div>
             
             <div class="form-group margin-top">
@@ -111,14 +132,62 @@
               <div class="ai-detection-banner" id="ai-detection-banner" style="display:none;">
                 <span id="ai-detection-text"><i class="fa-solid fa-shapes"></i> Neural Contour Tracing Ready</span>
               </div>
+
+              <!-- Feature 7: AI Detection Review, Confidence & Manual Correction Panel -->
+              <div class="ai-review-panel" id="ai-detection-review-panel" style="display:none;">
+                <div class="ai-review-header">
+                  <div class="ai-review-title-wrap">
+                    <i class="fa-solid fa-user-check"></i>
+                    <strong>AI Detection Review &amp; Manual Correction</strong>
+                    <span class="ai-review-count-pill" id="ai-rev-person-count">0 People</span>
+                    <span class="ai-review-count-pill face" id="ai-rev-face-count">0 Faces</span>
+                  </div>
+                  <div class="ai-review-actions">
+                    <button type="button" class="btn btn-xs btn-outline" id="btn-ai-add-manual" title="Drag on the Original Image canvas to manually add a missed face or person">
+                      <i class="fa-solid fa-plus"></i> Add Missing Detection
+                    </button>
+                    <button type="button" class="btn btn-xs btn-outline" id="btn-ai-select-all" title="Select all detected items">
+                      <i class="fa-solid fa-check-double"></i> Select All
+                    </button>
+                    <button type="button" class="btn btn-xs btn-outline" id="btn-ai-rescan" title="Reset manual edits and re-run AI detection">
+                      <i class="fa-solid fa-arrows-rotate"></i> Reset AI
+                    </button>
+                    <button type="button" class="btn btn-xs btn-success" id="btn-ai-confirm-detections">
+                      <i class="fa-solid fa-circle-check"></i> Confirm Selection
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Manual Add Mode Helper Banner -->
+                <div class="ai-manual-add-banner" id="ai-manual-add-banner" style="display:none;">
+                  <i class="fa-solid fa-crosshairs"></i>
+                  <span id="ai-manual-add-text"><b>Manual Add Mode Active:</b> Click and drag a box over the missed face or person on the <b>Original Image</b> canvas to generate a Canny edge-snapped contour mask.</span>
+                  <button type="button" class="btn btn-xs btn-outline" id="btn-ai-cancel-manual">Cancel</button>
+                </div>
+
+                <!-- Individual Detected Faces / Persons List -->
+                <div class="ai-review-items-grid" id="ai-rev-items-list"></div>
+
+                <!-- Boundary / Mask Padding Fine-Tuning Row -->
+                <div class="ai-review-footer">
+                  <div class="ai-pad-control">
+                    <label for="ai-mask-pad-slider"><i class="fa-solid fa-expand"></i> Contour Boundary Adjustment:</label>
+                    <input type="range" id="ai-mask-pad-slider" min="-6" max="10" step="1" value="0" class="slider ai-pad-slider">
+                    <span id="ai-mask-pad-val" class="ai-pad-badge">0 px (Exact Edge)</span>
+                  </div>
+                  <span class="ai-confirm-status" id="ai-confirm-status">
+                    <i class="fa-solid fa-shield-halved"></i> Active mask synced with confirmed detections
+                  </span>
+                </div>
+              </div>
             </div>
 
             <div class="form-group margin-top">
-              <label><i class="fa-solid fa-layer-group"></i> Active 3-Stage Reversible Cryptosystem (.msbx Container):</label>
+              <label><i class="fa-solid fa-layer-group"></i> Active 3-Stage Reversible Cryptosystem (Self-Describing Encrypted PNG):</label>
               <div class="mode-card-single">
                 <div class="mode-header">
                   <span class="mode-badge msb-badge"><i class="fa-solid fa-lock"></i> 3-Stage Reversible Encryption</span>
-                  <span class="mode-tag"><i class="fa-solid fa-file-shield"></i> 68-Byte MSBX Header + SHA-256 Tag</span>
+                  <span class="mode-tag"><i class="fa-solid fa-file-image"></i> PNG + Embedded <code>msBx</code> Metadata</span>
                 </div>
                 <p class="mode-desc">
                   <b>KDF:</b> 16-byte fresh CSPRNG salt + 100,000 iterated SHA-256 rounds (domain-tagged streams)<br>
@@ -138,6 +207,12 @@
                     <option value="7">k = 7 (Top 7 MSBs: b₇..b₁)</option>
                     <option value="8">k = 8 (Full 8-bit XOR: b₇..b₀)</option>
                   </select>
+                </div>
+                <div class="msbx-mask-privacy-row" id="enc-mask-privacy-row">
+                  <label class="checkbox-inline" for="enc-protect-mask">
+                    <input type="checkbox" id="enc-protect-mask">
+                    <span><i class="fa-solid fa-user-shield"></i> <b>Optional Mask Privacy Protection:</b> XOR-encrypt selective segmentation mask inside <code>msBx</code> metadata so region shape is hidden until key is provided</span>
+                  </label>
                 </div>
               </div>
             </div>
@@ -274,48 +349,523 @@
                 <span class="m-label">Bits Swapped</span>
                 <span class="m-value" id="val-enc-swapped">0</span>
               </div>
+              <div class="metric-item">
+                <span class="m-label">Processing Time</span>
+                <span class="m-value" id="val-enc-time">0 ms</span>
+              </div>
             </div>
 
             <!-- Export Converter Controls -->
             <div class="export-box" id="enc-export-box">
-              <h3><i class="fa-solid fa-box-archive"></i> Portable .msbx Encrypted Container</h3>
+              <h3><i class="fa-solid fa-file-image"></i> Self-Describing Encrypted PNG Output</h3>
               <p class="export-subtext">
-                Download the standalone <code>.msbx</code> container file (68-byte header + encrypted pixel payload + 32-byte SHA-256 verification tag). Anyone can upload this single <code>.msbx</code> file on any device to decrypt and recover the original image without needing a separate PNG/BMP file.
+                Download <code>encrypted_photo.png</code> — a standard, lossless PNG image that displays the encrypted pixels in any ordinary image viewer while storing all required non-secret decryption parameters (<code>KENX-ENC</code> header, 16-byte salt, SHA-256 verification tag, and AI region mask) inside a private ancillary unsafe-to-copy <code>msBX</code> PNG chunk.
               </p>
-              <div class="export-row" style="margin-bottom: 12px;">
-                <button id="btn-download-msbx" class="btn btn-primary" style="width: 100%;" disabled>
-                  <i class="fa-solid fa-file-arrow-down"></i> Download Portable .msbx File
+              <div class="export-row" style="margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+                <button id="btn-download-encrypted" class="btn btn-primary" style="flex: 1; min-width: 220px;" disabled>
+                  <i class="fa-solid fa-download"></i> Download Encrypted PNG (encrypted_photo.png)
+                </button>
+                <button id="btn-scroll-to-explorer" type="button" class="btn btn-outline" style="flex: 1; min-width: 220px;">
+                  <i class="fa-solid fa-microchip"></i> Open PNG Binary Structure &amp; Metadata Editor ↓
                 </button>
               </div>
 
-              <!-- 68-Byte MSBX Header Summary Card -->
+              <!-- Embedded msBX PNG Metadata Summary Card -->
               <div class="msbx-meta-card" id="enc-msbx-info" style="display:none;"></div>
-
-              <details class="secondary-export-details">
-                <summary><i class="fa-solid fa-image"></i> Optional: Save Ciphertext Preview as PNG / BMP Image</summary>
-                <div class="export-row" style="margin-top: 10px;">
-                  <div class="form-group flex-1">
-                    <label for="enc-export-format">Preview Format:</label>
-                    <select id="enc-export-format" class="form-select">
-                      <option value="image/png" selected>PNG (Lossless Preview)</option>
-                      <option value="image/bmp">BMP (Lossless 24-bit Bitmap)</option>
-                      <option value="image/webp">WEBP (High Quality)</option>
-                      <option value="image/jpeg">JPEG (Lossy)</option>
-                    </select>
-                  </div>
-                  <div class="form-group flex-1" id="jpeg-quality-group" style="display:none;">
-                    <label for="enc-quality">Quality (0.1 - 1.0):</label>
-                    <input type="range" id="enc-quality" min="0.5" max="1" step="0.05" value="0.95" class="slider">
-                    <span id="quality-val">0.95</span>
-                  </div>
-                  <button id="btn-download-encrypted" class="btn btn-outline" disabled>
-                    <i class="fa-solid fa-download"></i> Save Preview Image
-                  </button>
-                </div>
-              </details>
             </div>
 
           </div>
+        </div>
+
+        <!-- ================= EXPANDABLE SECTION: PNG BINARY STRUCTURE & METADATA EDITOR ================= -->
+        <div class="panel glass margin-top" id="enc-integrated-explorer-section">
+          <details id="enc-explorer-details" class="enc-explorer-details">
+            <summary class="enc-explorer-summary">
+              <div class="pex-top-header" style="width: 100%;">
+                <div>
+                  <h2 class="panel-title" style="margin-bottom: 4px;">
+                    <i class="fa-solid fa-microchip"></i> PNG Binary Structure &amp; Metadata Editor
+                    <span class="badge-fyp" style="margin-left: 8px; font-size: 11px;">Click to Expand / Collapse</span>
+                  </h2>
+                  <p class="section-intro" style="margin-bottom: 0;">
+                    Inspect your newly generated encrypted PNG's binary chunks, view Hex/Binary/Decimal fields, manipulate metadata or bits, optimize <code>msBX</code> storage, and validate before downloading.
+                  </p>
+                </div>
+                <div class="pex-quick-actions" onclick="event.stopPropagation();">
+                  <button type="button" class="btn btn-outline btn-sm" id="btn-pex-load-current" title="Reset to the latest generated encrypted PNG">
+                    <i class="fa-solid fa-arrows-rotate"></i> Reset to Generated Encrypted PNG
+                  </button>
+                </div>
+              </div>
+            </summary>
+
+            <!-- Active File Summary Bar -->
+            <div class="pex-file-summary-bar margin-top" id="pex-file-summary-bar">
+              <div class="pex-summary-item">
+                <span class="pex-sum-label">Generated PNG Output</span>
+                <span class="pex-sum-val" id="pex-sum-filename">encrypted_photo.png</span>
+              </div>
+              <div class="pex-summary-item">
+                <span class="pex-sum-label">Total PNG Size</span>
+                <span class="pex-sum-val" id="pex-sum-filesize">0 B</span>
+              </div>
+              <div class="pex-summary-item">
+                <span class="pex-sum-label">IHDR Dimensions</span>
+                <span class="pex-sum-val" id="pex-sum-dims">0 × 0 px</span>
+              </div>
+              <div class="pex-summary-item">
+                <span class="pex-sum-label">Metadata Chunk</span>
+                <span class="pex-sum-val" id="pex-sum-chunk">msBX (Schema v2)</span>
+              </div>
+              <div class="pex-summary-item">
+                <span class="pex-sum-label">Working Copy Status</span>
+                <span class="pex-sum-val" id="pex-sum-edit-state">Unmodified (Original Copy)</span>
+              </div>
+            </div>
+
+            <!-- 5 Internal Tabs -->
+            <div class="pex-subtabs margin-top" role="tablist">
+              <button type="button" class="pex-subtab active" data-pex-tab="pex-panel-structure" id="pex-tab-btn-structure">
+                <i class="fa-solid fa-sitemap"></i> 1. PNG Structure
+              </button>
+              <button type="button" class="pex-subtab" data-pex-tab="pex-panel-hex" id="pex-tab-btn-hex">
+                <i class="fa-solid fa-binary"></i> 2. Hex / Binary Viewer
+              </button>
+              <button type="button" class="pex-subtab" data-pex-tab="pex-panel-editor" id="pex-tab-btn-editor">
+                <i class="fa-solid fa-sliders"></i> 3. Bit/Byte Editor
+              </button>
+              <button type="button" class="pex-subtab" data-pex-tab="pex-panel-optimization" id="pex-tab-btn-optimization">
+                <i class="fa-solid fa-compress"></i> 4. Metadata Optimization
+              </button>
+              <button type="button" class="pex-subtab" data-pex-tab="pex-panel-validation" id="pex-tab-btn-validation">
+                <i class="fa-solid fa-shield-halved"></i> 5. Validation
+              </button>
+            </div>
+
+            <!-- ================= SUB-TAB 1: PNG STRUCTURE & FIELD BREAKDOWN ================= -->
+            <div class="pex-subpanel active" id="pex-panel-structure">
+              <div class="pex-card margin-top">
+                <div class="pex-card-header">
+                  <div>
+                    <h3><i class="fa-solid fa-chart-pie"></i> Storage Usage Visualization &amp; Section Proportions</h3>
+                    <p class="pex-card-sub" id="pex-size-formula-banner">Total PNG Size = Signature (8 B) + All Chunk Sizes (including 12 B overhead per chunk)</p>
+                  </div>
+                  <div class="pex-unit-switcher" role="group" aria-label="Storage Display Unit">
+                    <button type="button" class="btn btn-xs btn-primary pex-unit-btn" data-unit="bytes">Bytes</button>
+                    <button type="button" class="btn btn-xs btn-outline pex-unit-btn" data-unit="kib">KiB</button>
+                    <button type="button" class="btn btn-xs btn-outline pex-unit-btn" data-unit="pct">% of File Size</button>
+                  </div>
+                </div>
+                <div class="pex-stacked-bar" id="pex-storage-bar"></div>
+                <div class="pex-storage-legend" id="pex-storage-legend"></div>
+              </div>
+
+              <div class="pex-card margin-top">
+                <div class="pex-card-header">
+                  <div>
+                    <h3><i class="fa-solid fa-layer-group"></i> PNG Chunk Structure Overview</h3>
+                    <p class="pex-card-sub">Every PNG chunk includes a 12-byte structural envelope: 4-byte Length (Big-Endian) + 4-byte ASCII Type + Chunk Data + 4-byte CRC-32 checksum.</p>
+                  </div>
+                </div>
+                <div class="pex-table-wrap">
+                  <table class="pex-table" id="pex-chunks-table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Section / Chunk</th>
+                        <th>Chunk Type &amp; Properties</th>
+                        <th>Byte Offset</th>
+                        <th>Data Length</th>
+                        <th>Overhead</th>
+                        <th>Total Size</th>
+                        <th>% of File</th>
+                        <th>CRC-32 &amp; Status</th>
+                        <th>Purpose &amp; Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="pex-chunks-tbody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="pex-card margin-top" id="pex-msbx-breakdown-card">
+                <div class="pex-card-header">
+                  <div>
+                    <h3><i class="fa-solid fa-magnifying-glass-chart"></i> <code>msBX</code> Metadata Field-by-Field Breakdown</h3>
+                    <p class="pex-card-sub" id="pex-msbx-breakdown-sub">Click any metadata field row to highlight its exact bytes and bits inside the Hex &amp; Binary Viewer or Bit/Byte Editor.</p>
+                  </div>
+                  <span class="badge-fyp" id="pex-msbx-schema-badge">Schema v2 Compact</span>
+                </div>
+                <div id="pex-msbx-envelope-summary" class="pex-envelope-strip"></div>
+                <div class="pex-table-wrap">
+                  <table class="pex-table" id="pex-msbx-fields-table">
+                    <thead>
+                      <tr>
+                        <th>Metadata Field</th>
+                        <th>Decoded Value</th>
+                        <th>Storage</th>
+                        <th>Chunk Offset / Bit Range</th>
+                        <th>File Byte Offset</th>
+                        <th>Raw Hex / Binary</th>
+                        <th>Description &amp; Inspect</th>
+                      </tr>
+                    </thead>
+                    <tbody id="pex-msbx-fields-tbody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- ================= SUB-TAB 2: HEXADECIMAL, BINARY, DECIMAL & DECODED VIEWER ================= -->
+            <div class="pex-subpanel" id="pex-panel-hex" style="display: none;">
+              <div class="pex-card margin-top">
+                <div class="pex-hex-toolbar">
+                  <div class="pex-toolbar-group">
+                    <label for="pex-hex-section-select"><b>Inspect Section:</b></label>
+                    <select id="pex-hex-section-select" class="form-input pex-select-sm"></select>
+                  </div>
+
+                  <div class="pex-toolbar-group">
+                    <label><b>View Mode:</b></label>
+                    <div class="pex-view-btns">
+                      <button type="button" class="btn btn-xs btn-primary pex-view-mode-btn" data-view="hex">1. Hexadecimal View</button>
+                      <button type="button" class="btn btn-xs btn-outline pex-view-mode-btn" data-view="binary">2. Binary View (8 bits)</button>
+                      <button type="button" class="btn btn-xs btn-outline pex-view-mode-btn" data-view="decimal">3. Decimal View (0–255)</button>
+                      <button type="button" class="btn btn-xs btn-outline pex-view-mode-btn" data-view="decoded">4. Decoded Field View</button>
+                    </div>
+                  </div>
+
+                  <div class="pex-toolbar-group">
+                    <button type="button" class="btn btn-xs btn-outline" id="btn-pex-hex-prev"><i class="fa-solid fa-chevron-left"></i> Prev Page</button>
+                    <span id="pex-hex-page-label" class="pex-mono-label">Bytes 0..255</span>
+                    <button type="button" class="btn btn-xs btn-outline" id="btn-pex-hex-next">Next Page <i class="fa-solid fa-chevron-right"></i></button>
+                  </div>
+                </div>
+
+                <!-- Quick Field Highlight Pills -->
+                <div class="pex-field-pills" id="pex-field-pills"></div>
+
+                <div class="pex-hex-layout">
+                  <div class="pex-hex-grid-box" id="pex-hex-grid-box"></div>
+
+                  <div class="pex-byte-inspector" id="pex-byte-inspector">
+                    <h4><i class="fa-solid fa-crosshairs"></i> Selected Byte &amp; Field Inspector</h4>
+                    <div class="pex-insp-grid">
+                      <div class="pex-insp-row"><span>File Byte Offset:</span><strong id="pex-insp-file-off">0 (0x0000)</strong></div>
+                      <div class="pex-insp-row"><span>Section / Chunk:</span><strong id="pex-insp-section">msBX</strong></div>
+                      <div class="pex-insp-row"><span>Hexadecimal:</span><strong id="pex-insp-hex" class="pex-code-val">B2</strong></div>
+                      <div class="pex-insp-row"><span>Binary (8 bits):</span><strong id="pex-insp-bin" class="pex-code-val">10110010</strong></div>
+                      <div class="pex-insp-row"><span>Decimal (uint8):</span><strong id="pex-insp-dec" class="pex-code-val">178</strong></div>
+                      <div class="pex-insp-row"><span>ASCII Character:</span><strong id="pex-insp-ascii">.</strong></div>
+                      <div class="pex-insp-row full">
+                        <span>Associated Metadata Field &amp; Meaning:</span>
+                        <strong id="pex-insp-field">Compact Magic Nibble &amp; Schema Version</strong>
+                      </div>
+                    </div>
+                    <button type="button" class="btn btn-primary btn-sm btn-block margin-top" id="btn-pex-edit-this-byte">
+                      <i class="fa-solid fa-pen-to-square"></i> Edit This Byte in Bit/Byte Editor
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ================= SUB-TAB 3: INTERACTIVE BIT & BYTE METADATA EDITOR ================= -->
+            <div class="pex-subpanel" id="pex-panel-editor" style="display: none;">
+              <div class="pex-editor-banner margin-top">
+                <div class="pex-editor-banner-left">
+                  <i class="fa-solid fa-shield-cat"></i>
+                  <div>
+                    <strong>Safe In-Memory Working Copy Editor (Mode A Structured &amp; Mode B Binary)</strong>
+                    <p>Mode A regenerates a cryptographically valid encrypted PNG when encryption-critical settings change. Mode B lets you flip raw bits or edit hex bytes on an isolated copy.</p>
+                  </div>
+                </div>
+                <div class="pex-editor-actions">
+                  <button type="button" class="btn btn-xs btn-outline" id="btn-pex-undo" disabled><i class="fa-solid fa-rotate-left"></i> Undo</button>
+                  <button type="button" class="btn btn-xs btn-outline" id="btn-pex-redo" disabled><i class="fa-solid fa-rotate-right"></i> Redo</button>
+                  <button type="button" class="btn btn-xs btn-outline" id="btn-pex-reset"><i class="fa-solid fa-arrows-rotate"></i> Reset to Original</button>
+                  <button type="button" class="btn btn-xs btn-success" id="btn-pex-export-modified"><i class="fa-solid fa-check-to-slot"></i> Validate &amp; Go to Download</button>
+                </div>
+              </div>
+
+              <div class="grid-2col margin-top">
+                <!-- Left Column: Mode A — Structured Metadata & Configuration Editor -->
+                <div class="pex-card">
+                  <h3><i class="fa-solid fa-sliders"></i> Mode A — Structured Editor (Safe Regeneration &amp; Optional Metadata)</h3>
+                  <p class="pex-card-sub">Edit optional metadata descriptions, encoding schema, or encryption-critical settings (<i>k</i>, scope, mask privacy). When encryption-critical settings change, the system automatically re-encrypts the original image so the output stays 100% valid and decryptable.</p>
+
+                  <div class="pex-struct-form">
+                    <div class="form-group">
+                      <label for="pex-edit-schema-ver">Metadata Schema Format Version:</label>
+                      <select id="pex-edit-schema-ver" class="form-input">
+                        <option value="2">Schema v2 — Optimized Compact Binary (51 B fixed header)</option>
+                        <option value="1">Schema v1 — Legacy Fixed Header (76 B fixed header)</option>
+                      </select>
+                    </div>
+
+                    <div class="pex-form-row-2">
+                      <div class="form-group">
+                        <label for="pex-edit-k">Stage 3 MSB k Value (1–8):</label>
+                        <select id="pex-edit-k" class="form-input">
+                          <option value="1">k = 1 bit</option>
+                          <option value="2" selected>k = 2 bits (Default)</option>
+                          <option value="3">k = 3 bits</option>
+                          <option value="4">k = 4 bits</option>
+                          <option value="5">k = 5 bits</option>
+                          <option value="6">k = 6 bits</option>
+                          <option value="7">k = 7 bits</option>
+                          <option value="8">k = 8 bits</option>
+                        </select>
+                      </div>
+                      <div class="form-group">
+                        <label for="pex-edit-scope">Encryption Scope:</label>
+                        <select id="pex-edit-scope" class="form-input">
+                          <option value="full">0 — Full Image</option>
+                          <option value="person">1 — Body Silhouette</option>
+                          <option value="face">2 — Face Contour</option>
+                          <option value="custom">3 — Custom ROI</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div class="pex-form-row-2">
+                      <div class="form-group">
+                        <label for="pex-edit-keytype">Key Type Identifier:</label>
+                        <select id="pex-edit-keytype" class="form-input">
+                          <option value="text">0 — Text Password</option>
+                          <option value="image">1 — Key Image (SHA-256)</option>
+                        </select>
+                      </div>
+                      <div class="form-group">
+                        <label for="pex-edit-colormode">Original Colour Mode:</label>
+                        <select id="pex-edit-colormode" class="form-input">
+                          <option value="0">0 — Grayscale (8-bit)</option>
+                          <option value="1" selected>1 — RGB (24-bit)</option>
+                          <option value="2">2 — RGBA (32-bit)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div class="pex-form-row-2">
+                      <div class="form-group">
+                        <label for="pex-edit-maskcodec">Mask Compression Codec (v2):</label>
+                        <select id="pex-edit-maskcodec" class="form-input">
+                          <option value="3">3 — RLE-Varint (LEB128)</option>
+                          <option value="4">4 — DEFLATE (RFC 1951)</option>
+                          <option value="2">2 — Bit-Packed (1 bit/px)</option>
+                          <option value="1">1 — Raw Binary (1 B/px)</option>
+                        </select>
+                      </div>
+                      <div class="form-group">
+                        <label for="pex-edit-opt-tag">Optional Author / App Tag (v2 TLV):</label>
+                        <input type="text" id="pex-edit-opt-tag" class="form-input" placeholder="e.g. KXBIT-FYP-2026" maxlength="48">
+                      </div>
+                    </div>
+
+                    <div class="form-group">
+                      <label for="pex-edit-opt-desc">Optional Metadata Description / Comment (v2 TLV):</label>
+                      <input type="text" id="pex-edit-opt-desc" class="form-input" placeholder="e.g. Selective face encryption verified for FYP submission" maxlength="96">
+                    </div>
+
+                    <button type="button" class="btn btn-primary btn-block margin-top" id="btn-pex-apply-structured">
+                      <i class="fa-solid fa-wand-magic-sparkles"></i> Apply Structured Changes &amp; Regenerate Validated PNG
+                    </button>
+                  </div>
+
+                  <div class="pex-live-val-strip margin-top" id="pex-editor-live-validation"></div>
+                </div>
+
+                <!-- Right Column: Mode B — Advanced Binary & Hex Editor -->
+                <div class="pex-card">
+                  <h3><i class="fa-solid fa-toggle-on"></i> Mode B — Advanced Binary &amp; Hex Editor</h3>
+                  <p class="pex-card-sub">Select any byte in the <code>msBX</code> metadata payload below, toggle individual bits <code>0 ↔ 1</code>, or type a hexadecimal value directly to observe immediate binary/decimal changes.</p>
+
+                  <!-- Interactive Byte Map of msBX Payload -->
+                  <div class="pex-editor-byte-map" id="pex-editor-byte-map"></div>
+
+                  <!-- 8-Bit Interactive Bit Flipper + Direct Hex Byte Editor Widget -->
+                  <div class="pex-bit-flipper-box margin-top" id="pex-bit-flipper-box">
+                    <div class="pex-bit-header">
+                      <span id="pex-bit-selected-label"><b>Selected Byte:</b> Offset +0 in <code>msBX</code></span>
+                      <span id="pex-bit-affected-field" class="pex-field-tag">Compact Magic &amp; Version</span>
+                    </div>
+
+                    <div class="pex-8bits-row" id="pex-8bits-row"></div>
+
+                    <!-- Direct Hex Value Editor Row -->
+                    <div class="pex-direct-hex-row" style="display: flex; align-items: center; gap: 8px; margin-top: 10px;">
+                      <label for="pex-direct-hex-input" style="font-size: 11.5px; font-weight: 600; white-space: nowrap;">Edit Byte Hex (00–FF):</label>
+                      <input type="text" id="pex-direct-hex-input" class="form-input" value="B2" maxlength="2" style="width: 72px; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; text-align: center; padding: 5px 8px;">
+                      <button type="button" class="btn btn-xs btn-primary" id="btn-pex-apply-hex">Apply Hex Byte</button>
+                    </div>
+
+                    <div class="pex-bit-readout-grid">
+                      <div class="pex-readout-item">
+                        <span>Original Byte (Bin / Hex / Dec)</span>
+                        <strong id="pex-bit-orig-val">10110010 (0xB2 • 178)</strong>
+                      </div>
+                      <div class="pex-readout-item">
+                        <span>Modified Byte (Bin / Hex / Dec)</span>
+                        <strong id="pex-bit-curr-val" style="color: var(--primary-blue);">10110010 (0xB2 • 178)</strong>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ================= SUB-TAB 4: METADATA STORAGE OPTIMIZATION ANALYSIS ================= -->
+            <div class="pex-subpanel" id="pex-panel-optimization" style="display: none;">
+              <div class="pex-card margin-top">
+                <div class="pex-card-header">
+                  <div>
+                    <h3><i class="fa-solid fa-gauge-high"></i> Metadata Storage Optimization Analysis (Schema v1 vs. Optimized Schema v2)</h3>
+                    <p class="pex-card-sub">Formula: <code>Storage Reduction (%) = (Original Size − Optimized Size) / Original Size × 100</code></p>
+                  </div>
+                  <button type="button" class="btn btn-success btn-sm" id="btn-pex-apply-v2-opt">
+                    <i class="fa-solid fa-bolt"></i> Apply Optimal v2 Compact Storage to Active PNG
+                  </button>
+                </div>
+
+                <div class="pex-opt-kpi-grid" id="pex-opt-kpi-grid"></div>
+
+                <h4 class="margin-top"><i class="fa-solid fa-table-list"></i> Field-by-Field Header Optimization Breakdown (76 Bytes → 51 Bytes)</h4>
+                <div class="pex-table-wrap">
+                  <table class="pex-table">
+                    <thead>
+                      <tr>
+                        <th>Metadata Component</th>
+                        <th>Legacy Schema v1</th>
+                        <th>Optimized Schema v2</th>
+                        <th>Bytes Saved</th>
+                        <th>Optimization Technique</th>
+                      </tr>
+                    </thead>
+                    <tbody id="pex-opt-fields-tbody"></tbody>
+                  </table>
+                </div>
+
+                <h4 class="margin-top"><i class="fa-solid fa-masks-theater"></i> Lossless AI Face/Body Segmentation Mask Compression Benchmark</h4>
+                <p class="pex-card-sub" id="pex-mask-bench-subtitle">Compares Raw Binary (1 B/px), Bit-Packed (1 bit/px), Run-Length Encoding (LEB128 RLE), and DEFLATE (RFC 1951) on the segmentation mask.</p>
+                <div class="pex-table-wrap">
+                  <table class="pex-table">
+                    <thead>
+                      <tr>
+                        <th>Codec ID &amp; Method</th>
+                        <th>Encoded Size</th>
+                        <th>Bytes Saved vs. Raw</th>
+                        <th>Compression Ratio</th>
+                        <th>Storage Reduction (%)</th>
+                        <th>Encode / Decode Time</th>
+                        <th>Bit-for-Bit Recovery</th>
+                      </tr>
+                    </thead>
+                    <tbody id="pex-mask-bench-tbody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- ================= SUB-TAB 5: VALIDATION, DOWNLOAD & EDUCATIONAL TAMPERING ================= -->
+            <div class="pex-subpanel" id="pex-panel-validation" style="display: none;">
+              <!-- Final Validate & Download Banner on Encryption Page -->
+              <div class="pex-card margin-top" id="pex-step4-download-card">
+                <div class="pex-card-header">
+                  <div>
+                    <h3><i class="fa-solid fa-cloud-arrow-down"></i> Validate &amp; Download Encrypted PNG</h3>
+                    <p class="pex-card-sub" id="pex-step4-status-desc">Verifies PNG signature, chunk lengths, CRC-32 checksums, <code>msBX</code> schema, SHA-256 cryptographic tag, and 0-different-pixel decryption recovery before download.</p>
+                  </div>
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                  <button type="button" class="btn btn-primary" id="btn-pex-validate-now">
+                    <i class="fa-solid fa-shield-check"></i> Validate PNG
+                  </button>
+                  <button type="button" class="btn btn-success" id="btn-pex-download-verified" style="flex: 1; min-width: 240px;">
+                    <i class="fa-solid fa-download"></i> Download Encrypted PNG (encrypted_photo.png)
+                  </button>
+                  <button type="button" class="btn btn-outline" id="btn-pex-val-reset">
+                    <i class="fa-solid fa-arrows-rotate"></i> Reset to Validated PNG
+                  </button>
+                  <button type="button" class="btn btn-outline" id="btn-pex-download-unverified" style="display: none; border-color: #f59e0b; color: #d97706;">
+                    <i class="fa-solid fa-flask"></i> Export Experimental Unverified PNG
+                  </button>
+                </div>
+              </div>
+
+              <div class="grid-2col margin-top">
+                <!-- Left: 4-Tier Validation & Live Decryption Verification -->
+                <div class="pex-card">
+                  <h3><i class="fa-solid fa-list-check"></i> 4-Tier PNG &amp; Cryptographic Integrity Validation</h3>
+                  <p class="pex-card-sub">Clearly distinguishes outer PNG transport integrity (CRC-32) from metadata schema validity and SHA-256 cryptographic authenticity.</p>
+
+                  <div class="pex-tier-list" id="pex-validation-tiers"></div>
+
+                  <div class="pex-crc-edu-banner margin-top">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    <div>
+                      <strong>Why PNG CRC-32 ≠ Cryptographic Authenticity</strong>
+                      <p>A PNG chunk's 32-bit CRC only detects accidental bit flips during transmission; anyone who edits metadata can recompute a valid CRC-32. Only the <b>32-byte keyed SHA-256 verification tag</b> (Tier 3) proves that the metadata, key, mask, and decrypted pixels are authentic.</p>
+                    </div>
+                  </div>
+
+                  <div class="form-group margin-top">
+                    <label for="pex-test-password"><i class="fa-solid fa-key"></i> Active Verification Key (Auto-synced from Encryption Key):</label>
+                    <div class="pex-test-key-row">
+                      <input type="text" id="pex-test-password" class="form-input" value="KXBIT-Demo-Key-2026" placeholder="Enter encryption password to verify Tier 3 &amp; 4...">
+                      <button type="button" class="btn btn-primary" id="btn-pex-run-validation">
+                        <i class="fa-solid fa-play"></i> Verify Now
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Right: Educational Tampering Mode -->
+                <div class="pex-card">
+                  <h3><i class="fa-solid fa-flask-vial"></i> Educational Tampering Mode (Deliberate Failure Experiments)</h3>
+                  <p class="pex-card-sub">Click any tampering experiment below to deliberately modify the in-memory PNG copy and observe how each validation layer responds.</p>
+
+                  <div class="pex-tamper-grid">
+                    <button type="button" class="pex-tamper-btn" data-tamper="change-k">
+                      <strong>1. Change MSB k (2 → 4)</strong>
+                      <span>Valid CRC &amp; Schema, Fails SHA-256 Tag</span>
+                    </button>
+                    <button type="button" class="pex-tamper-btn" data-tamper="change-algo">
+                      <strong>2. Change Algorithm Version</strong>
+                      <span>Valid CRC, Rejected by Schema Validator</span>
+                    </button>
+                    <button type="button" class="pex-tamper-btn" data-tamper="modify-salt">
+                      <strong>3. Modify 1 Byte of Salt</strong>
+                      <span>Derives wrong PRNG streams → Fails SHA-256</span>
+                    </button>
+                    <button type="button" class="pex-tamper-btn" data-tamper="remove-msbx">
+                      <strong>4. Remove Required <code>msBX</code> Chunk</strong>
+                      <span>Valid standard PNG, Fails Metadata Presence</span>
+                    </button>
+                    <button type="button" class="pex-tamper-btn" data-tamper="modify-mask">
+                      <strong>5. Modify Face/Body Mask</strong>
+                      <span>Corrupts selective region mask → Fails Verification</span>
+                    </button>
+                    <button type="button" class="pex-tamper-btn" data-tamper="corrupt-crc">
+                      <strong>6. Corrupt Chunk CRC-32</strong>
+                      <span>Rejected at Tier 1 (PNG CRC-32 Mismatch)</span>
+                    </button>
+                  </div>
+
+                  <div class="pex-tamper-result-box margin-top" id="pex-tamper-result-box" style="display: none;">
+                    <h4 id="pex-tamper-result-title"><i class="fa-solid fa-microscope"></i> Tamper Experiment Report</h4>
+                    <div class="pex-tamper-exp-row">
+                      <span>Expected Effect:</span>
+                      <p id="pex-tamper-expected"></p>
+                    </div>
+                    <div class="pex-tamper-exp-row">
+                      <span>Actual Observed Result:</span>
+                      <p id="pex-tamper-actual"></p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
       </section>
 
@@ -327,16 +877,10 @@
             <h2 class="panel-title"><i class="fa-solid fa-unlock-keyhole"></i> Restorations & Decryption</h2>
             
             <div class="drop-zone" id="dec-drop-zone">
-              <input type="file" id="dec-file-input" accept=".msbx,application/octet-stream,image/png,image/bmp,image/*" class="file-input">
+              <input type="file" id="dec-file-input" accept="image/png,.png,.msbx,application/octet-stream" class="file-input">
               <i class="fa-solid fa-file-shield drop-icon"></i>
-              <p class="drop-text">Drag & drop your portable <b>.msbx</b> file here or <span>Browse</span></p>
-              <p class="drop-subtext">Upload a standalone <code>.msbx</code> container (or legacy lossless PNG / BMP)</p>
-            </div>
-
-            <div class="quick-action-bar margin-top">
-              <button type="button" id="btn-use-encrypted-from-enc" class="btn btn-sm btn-outline" style="width: 100%;">
-                <i class="fa-solid fa-arrow-right-arrow-left"></i> Use Encrypted .msbx from Encrypt Tab (1-Click Test)
-              </button>
+              <p class="drop-text">Drag & drop your <b>Encrypted PNG</b> (<code>encrypted_photo.png</code>) here or <span>Browse</span></p>
+              <p class="drop-subtext">Primary input: Self-Describing Encrypted PNG (with embedded <code>msBX</code> metadata) • Legacy <code>msBx</code> PNG &amp; <code>.msbx</code> files also supported</p>
             </div>
 
             <!-- Decryption / Container Verification Error Banner -->
@@ -348,13 +892,13 @@
               </div>
             </div>
 
-            <!-- .msbx 68-byte Header Inspector Card -->
+            <!-- Embedded PNG msBX / Legacy msBx Metadata Inspector Card -->
             <div class="msbx-meta-card margin-top" id="dec-msbx-meta" style="display:none;"></div>
 
-            <!-- Encrypted Region (auto-detected from the file's embedded header/metadata) -->
+            <!-- Encrypted Region (auto-detected from the file's embedded msBX / legacy msBx metadata) -->
             <div class="dec-scope-info" id="dec-scope-info" style="display:none;">
               <i class="fa-solid fa-wand-magic-sparkles"></i>
-              <span id="dec-scope-info-text">Encrypted region will be detected automatically.</span>
+              <span id="dec-scope-info-text">Encrypted region and key type will be detected automatically from embedded PNG metadata.</span>
             </div>
 
             <div class="form-group margin-top">
@@ -593,23 +1137,32 @@
         </div>
       </section>
 
-      <!-- ================= TAB 3: ENCRYPT VIDEO (3-5s SCRAMBLE & EXPORT) ================= -->
+      <!-- ================= TAB 3: ENCRYPT VIDEO (AI-BASED SELECTIVE FACE ENCRYPTION & .KXV CONTAINER) ================= -->
       <section id="video-enc-tab" class="tab-pane">
         <div class="grid-2col">
           <!-- Video Encryption Control Panel -->
           <div class="panel glass">
-            <h2 class="panel-title"><i class="fa-solid fa-film"></i> Video Encryption Controls</h2>
+            <h2 class="panel-title"><i class="fa-solid fa-film"></i> AI Selective Face Video Encryption (.kxv)</h2>
 
             <!-- Video Upload Drop Zone -->
             <div class="drop-zone" id="video-enc-drop-zone">
               <input type="file" id="video-enc-file-input" accept="video/*,.mp4,.webm,.mov,.mkv,.avi,.m4v" class="file-input">
               <i class="fa-solid fa-cloud-arrow-up drop-icon" id="video-enc-drop-icon"></i>
-              <p class="drop-text" id="video-enc-drop-text">Drag & drop original video here or <span>Browse</span></p>
-              <p class="drop-subtext">Supports MP4, WebM, MOV, MKV, AVI (3–5s recommended)</p>
+              <p class="drop-text" id="video-enc-drop-text">Drag & drop a short video here or <span>Browse</span></p>
+              <p class="drop-subtext">Supports MP4 &amp; WebM (up to 5s recommended) • Outputs Self-Describing Lossless <b>encrypted_video.kxv</b></p>
               <div style="margin-top: 14px;">
-                <span class="btn btn-outline btn-sm" style="background: #ffffff; box-shadow: var(--shadow-sm);">
-                  <i class="fa-solid fa-folder-open"></i> Choose Video File
+                <span class="btn btn-outline btn-sm" style="background: var(--bg-card); box-shadow: var(--shadow-sm);">
+                  <i class="fa-solid fa-folder-open"></i> Choose Short Video
                 </span>
+              </div>
+            </div>
+
+            <!-- Inline Video Validation Banner -->
+            <div class="dec-error-banner" id="video-enc-validation-banner" style="display: none;">
+              <i class="fa-solid fa-triangle-exclamation"></i>
+              <div class="dec-error-content">
+                <strong id="video-enc-validation-title">Video Validation Notice</strong>
+                <p id="video-enc-validation-msg"></p>
               </div>
             </div>
 
@@ -621,43 +1174,158 @@
               <div class="meta-item"><i class="fa-solid fa-layer-group"></i> <span id="meta-video-enc-frames">0 frames</span></div>
             </div>
 
-            <!-- Password Key -->
-            <div class="form-group margin-top">
-              <label for="video-enc-password"><i class="fa-solid fa-key"></i> Video Encryption Key / Password:</label>
-              <div class="password-wrapper">
-                <input type="password" id="video-enc-password" placeholder="Enter secure password for video frames..." class="form-input">
-                <button type="button" class="pwd-toggle" id="toggle-video-enc-pwd"><i class="fa-solid fa-eye"></i></button>
-              </div>
-              <p class="field-hint">The exact matching password will be required in the Decrypt Video tab.</p>
-            </div>
-
-            <!-- Algorithm Selection -->
-            <div class="form-group">
-              <label for="video-enc-algo-select"><i class="fa-solid fa-shield-halved"></i> Scramble Algorithm:</label>
-              <select id="video-enc-algo-select" class="form-select">
-                <option value="3stage" selected>3-Stage FYP BitShield (Pixel Shuffle + RGB Perm + 2-MSB XOR)</option>
-                <option value="2msb">2-MSB XOR Stream Cipher (Ultra Fast 60FPS)</option>
-                <option value="block">Macroblock Tile Permutation (16×16) + 2-MSB XOR</option>
-              </select>
-            </div>
-
             <!-- Frame Rate and Resolution Settings -->
             <div class="settings-grid margin-top">
               <div class="form-group">
-                <label for="video-enc-fps-select"><i class="fa-solid fa-gauge-high"></i> Target Frame Rate:</label>
-                <select id="video-enc-fps-select" class="form-select">
-                  <option value="15">15 FPS (Fast Processing)</option>
-                  <option value="24" selected>24 FPS (Cinema Standard)</option>
-                  <option value="30">30 FPS (Smooth Web Playback)</option>
+                <label for="video-enc-scale-select"><i class="fa-solid fa-compress"></i> Processing Resolution:</label>
+                <select id="video-enc-scale-select" class="form-select">
+                  <option value="320">320 × 240 (Fast &amp; Compact)</option>
+                  <option value="640" selected>640 × 360 (Standard HD-Ready)</option>
+                  <option value="original">Original Dimensions</option>
                 </select>
               </div>
 
               <div class="form-group">
-                <label for="video-enc-scale-select"><i class="fa-solid fa-compress"></i> Resolution Scaling:</label>
-                <select id="video-enc-scale-select" class="form-select">
-                  <option value="optimized" selected>Optimized (Max 640px - Fast & Smooth)</option>
-                  <option value="original">Original Dimensions</option>
+                <label for="video-enc-fps-select"><i class="fa-solid fa-gauge-high"></i> Frame Extraction Rate:</label>
+                <select id="video-enc-fps-select" class="form-select">
+                  <option value="12">12 FPS (Fast AI Scan &amp; Compact .kxv)</option>
+                  <option value="15" selected>15 FPS (Balanced Smoothness)</option>
+                  <option value="24">24 FPS (Cinema Standard)</option>
                 </select>
+              </div>
+            </div>
+
+            <!-- AI Face Detection & Selection Mode Section -->
+            <div class="form-group margin-top">
+              <div class="scope-header-flex">
+                <label><i class="fa-solid fa-user-check"></i> AI Face Detection &amp; Selection Mode:</label>
+                <span class="ai-status-badge" id="video-ai-status-badge">
+                  <i class="fa-solid fa-brain"></i> Ready to Scan
+                </span>
+              </div>
+
+              <!-- Selection Mode Buttons (Mode A: All Faces, Mode B: Selected Tracked Faces, or Full Frame) -->
+              <div class="ai-scope-grid video-scope-grid" id="video-enc-scope-group">
+                <button type="button" class="ai-scope-btn active" data-vscope="face_all">
+                  <i class="fa-solid fa-users-viewfinder"></i>
+                  <span class="scope-btn-title">Mode A: All Faces</span>
+                  <span class="scope-btn-sub" id="sub-video-all-faces">Encrypt every face</span>
+                </button>
+                <button type="button" class="ai-scope-btn" data-vscope="face_selected">
+                  <i class="fa-solid fa-user-tag"></i>
+                  <span class="scope-btn-title">Mode B: Select Person</span>
+                  <span class="scope-btn-sub" id="sub-video-sel-faces">Track &amp; choose IDs</span>
+                </button>
+                <button type="button" class="ai-scope-btn" data-vscope="full">
+                  <i class="fa-solid fa-border-all"></i>
+                  <span class="scope-btn-title">Entire Frame</span>
+                  <span class="scope-btn-sub">All pixels (100%)</span>
+                </button>
+              </div>
+
+              <!-- Scan & Detect Faces Button -->
+              <div style="margin-top: 10px;">
+                <button type="button" id="btn-video-scan-faces" class="btn btn-outline btn-block" disabled>
+                  <i class="fa-solid fa-wand-magic-sparkles"></i> Extract Frames &amp; Run AI Face Detection / Tracking
+                </button>
+              </div>
+
+              <!-- AI Detection Summary Banner -->
+              <div class="ai-detection-banner" id="video-ai-summary-banner" style="display: none;">
+                <span id="video-ai-summary-text"><i class="fa-solid fa-face-smile"></i> 0 faces detected across 0 frames.</span>
+              </div>
+
+              <!-- Mode B: Tracked Person Selection Cards -->
+              <div id="video-tracked-persons-box" class="video-tracked-persons-box" style="display: none;">
+                <div class="tracked-persons-header">
+                  <span><i class="fa-solid fa-id-badge"></i> <b>Tracked Persons Across Frames:</b> Check which person(s) to encrypt</span>
+                  <span id="video-tracking-conf-badge" class="ai-status-badge ready">High Confidence</span>
+                </div>
+                <div id="video-tracked-persons-list" class="tracked-persons-grid"></div>
+                <div id="video-tracking-warning" class="roi-helper-bar" style="display: none; margin-top: 8px;"></div>
+              </div>
+            </div>
+
+            <!-- 3-Stage Algorithm & MSB k Selection -->
+            <div class="form-group margin-top">
+              <label><i class="fa-solid fa-layer-group"></i> 3-Stage Selective Video Encryption Pipeline:</label>
+              <div class="mode-card-single">
+                <div class="mode-header">
+                  <span class="mode-badge msb-badge"><i class="fa-solid fa-shield-halved"></i> Frame-Keyed 3-Stage MSB Cipher</span>
+                  <span class="mode-tag"><i class="fa-solid fa-lock"></i> Lossless .kxv</span>
+                </div>
+                <p class="mode-desc">
+                  <b>Stage 1:</b> Keyed Fisher–Yates Pixel Permutation (strictly inside exact face mask)<br>
+                  <b>Stage 2:</b> Bijective 6-Way RGB Channel Permutation per selected pixel<br>
+                  <b>Stage 3:</b> Configurable <i>k</i>-MSB XOR with HKDF Frame-Dependent Key Streams
+                </p>
+                <div class="msbx-k-row">
+                  <label for="video-enc-k-select"><i class="fa-solid fa-sliders"></i> Stage 3 MSB Bit Depth (<i>k</i>):</label>
+                  <select id="video-enc-k-select" class="form-select msbx-k-select">
+                    <option value="1">k = 1 bit (b₇ only)</option>
+                    <option value="2" selected>k = 2 bits (b₇b₆ — Default FYP Spec)</option>
+                    <option value="3">k = 3 bits (b₇..b₅)</option>
+                    <option value="4">k = 4 bits (Upper Nibble b₇..b₄)</option>
+                    <option value="5">k = 5 bits (b₇..b₃)</option>
+                    <option value="6">k = 6 bits (b₇..b₂)</option>
+                    <option value="7">k = 7 bits (b₇..b₁)</option>
+                    <option value="8">k = 8 bits (Full Byte XOR b₇..b₀)</option>
+                  </select>
+                </div>
+                <input type="hidden" id="video-enc-algo-select" value="3stage">
+              </div>
+            </div>
+
+            <!-- Cryptographic Key Source Selection (Password OR Key Image) -->
+            <div class="form-group margin-top">
+              <label><i class="fa-solid fa-key"></i> Master Encryption Key Source:</label>
+              <div class="key-selector-grid" id="video-enc-key-selector">
+                <button type="button" class="key-selector-card active" data-vkeytype="text">
+                  <div class="key-card-radio"><i class="fa-solid fa-circle-dot"></i></div>
+                  <div class="key-card-icon"><i class="fa-solid fa-keyboard"></i></div>
+                  <div class="key-card-info">
+                    <span class="key-card-title">Text Password</span>
+                    <span class="key-card-sub">Salted SHA-256 + Frame HKDF</span>
+                  </div>
+                </button>
+                <button type="button" class="key-selector-card" data-vkeytype="image">
+                  <div class="key-card-radio"><i class="fa-regular fa-circle"></i></div>
+                  <div class="key-card-icon"><i class="fa-solid fa-image"></i></div>
+                  <div class="key-card-info">
+                    <span class="key-card-title">Image as Key</span>
+                    <span class="key-card-sub">256-Bit Visual File Digest</span>
+                  </div>
+                </button>
+              </div>
+
+              <!-- Option A: Password -->
+              <div id="video-enc-text-key-box">
+                <div class="input-with-icon">
+                  <i class="fa-solid fa-lock icon-left"></i>
+                  <input type="password" id="video-enc-password" placeholder="Enter secure password for video frames..." class="form-input" autocomplete="off">
+                  <button type="button" class="btn-toggle-pwd" id="toggle-video-enc-pwd"><i class="fa-solid fa-eye"></i></button>
+                </div>
+              </div>
+
+              <!-- Option B: Key Image -->
+              <div id="video-enc-img-key-box" style="display: none; margin-top: 8px;">
+                <div class="key-image-upload-box" id="video-enc-key-image-dropzone">
+                  <input type="file" id="video-enc-key-image-input" accept="image/*" style="display: none;">
+                  <div class="key-img-prompt" id="video-enc-key-img-prompt">
+                    <i class="fa-solid fa-cloud-arrow-up drop-icon" style="font-size: 24px; margin-bottom: 4px;"></i>
+                    <p style="font-size: 13px; font-weight: 600; color: var(--text-main);">Click or Drop Secret Key Image</p>
+                    <p style="font-size: 11px; color: var(--text-muted);">Exact image file required to decrypt the .kxv video</p>
+                  </div>
+                  <div class="key-img-card" id="video-enc-key-img-card" style="display: none;">
+                    <img id="video-enc-key-img-thumb" src="" alt="Key Thumbnail" class="key-img-thumb">
+                    <div class="key-img-info">
+                      <div class="key-img-name" id="video-enc-key-img-name">key.png</div>
+                      <div class="key-img-meta" id="video-enc-key-img-meta">0 KB</div>
+                      <div class="key-img-hash" id="video-enc-key-img-hash"><i class="fa-solid fa-fingerprint"></i> SHA-256: <span>...</span></div>
+                    </div>
+                    <button type="button" class="btn btn-xs btn-outline" id="btn-video-enc-remove-key-img"><i class="fa-solid fa-xmark"></i></button>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -672,72 +1340,78 @@
               </div>
               <div class="progress-sub">
                 <span id="video-enc-progress-details">Frame 0 / 0</span>
-                <span id="video-enc-progress-eta">ETA: Calculating...</span>
+                <span id="video-enc-progress-eta">Elapsed: 0.0s</span>
               </div>
             </div>
 
             <!-- Action Buttons -->
             <div class="action-row margin-top">
               <button id="btn-process-video-enc" class="btn btn-primary btn-block" disabled>
-                <i class="fa-solid fa-lock"></i> Encrypt Video Stream
+                <i class="fa-solid fa-lock"></i> Encrypt Selected Faces &amp; Generate .kxv
               </button>
               <button id="btn-cancel-video-enc" class="btn btn-outline" style="display: none;">
                 <i class="fa-solid fa-stop"></i> Cancel
               </button>
             </div>
-
-            <div class="fidelity-card margin-top">
-              <div class="fidelity-icon"><i class="fa-solid fa-graduation-cap"></i></div>
-              <div class="fidelity-text">
-                <h4>FYP Academic Cryptography Note:</h4>
-                <p>Frames undergo exact mathematical scrambling via deterministic SHA-256 seed sequences. The resulting stream is compiled into high-efficiency WebM (VP9/VP8) for browser playback and download.</p>
-              </div>
-            </div>
           </div>
 
-          <!-- Video Players & Results Panel -->
+          <!-- Video Players, AI Face Outline Inspector & Results Panel -->
           <div class="panel glass">
-            <h2 class="panel-title"><i class="fa-solid fa-circle-play"></i> Video Encryption Playback & Comparison</h2>
+            <h2 class="panel-title"><i class="fa-solid fa-circle-play"></i> AI Face Contour Preview &amp; Lossless .kxv Playback</h2>
 
-            <!-- Side by side video player preview -->
+            <!-- Side by side video / lossless frame player preview -->
             <div class="video-players-grid">
-              <!-- Left: Original Video Box -->
+              <!-- Left: Original Video / AI Face Outline Preview -->
               <div class="video-card">
                 <div class="video-card-header">
-                  <span class="video-tag orig"><i class="fa-solid fa-film"></i> Original Video</span>
+                  <span class="video-tag orig"><i class="fa-solid fa-face-viewfinder"></i> Original + AI Face Outlines</span>
                   <span class="video-time-tag" id="video-enc-orig-time">0:00</span>
                 </div>
                 <div class="video-display-area">
                   <video id="video-enc-orig-player" controls loop playsinline class="video-element" style="display: none;"></video>
+                  <canvas id="canvas-video-enc-orig-frame" class="video-element" style="display: none;"></canvas>
                   <div class="no-image-placeholder" id="ph-video-enc-orig">
                     <i class="fa-solid fa-video"></i>
                     <p>No video loaded yet</p>
-                    <span class="sub-hint">Upload a 3–5 second video to preview</span>
+                    <span class="sub-hint">Upload a short video (up to 5s) to detect &amp; encrypt faces</span>
                   </div>
                 </div>
               </div>
 
-              <!-- Right: Encrypted Video Box -->
+              <!-- Right: Encrypted Video (.kxv Lossless Frame Stream) -->
               <div class="video-card">
                 <div class="video-card-header">
-                  <span class="video-tag enc"><i class="fa-solid fa-shield-halved"></i> Encrypted Stream</span>
+                  <span class="video-tag enc"><i class="fa-solid fa-shield-halved"></i> Encrypted .kxv Stream</span>
                   <span class="video-time-tag" id="video-enc-result-time">0:00</span>
                 </div>
                 <div class="video-display-area">
-                  <video id="video-enc-result-player" controls autoplay loop playsinline class="video-element" style="display: none;"></video>
+                  <canvas id="canvas-video-enc-result-frame" class="video-element" style="display: none;"></canvas>
+                  <video id="video-enc-result-player" controls loop playsinline class="video-element" style="display: none;"></video>
                   <div class="no-image-placeholder" id="ph-video-enc-result">
                     <i class="fa-solid fa-lock"></i>
-                    <p>Encrypted result will appear here</p>
-                    <span class="sub-hint">Click "Encrypt Video Stream" to scramble</span>
+                    <p>Encrypted .kxv stream will appear here</p>
+                    <span class="sub-hint">Background stays clear • Only detected faces are MSB-encrypted</span>
                   </div>
                 </div>
               </div>
             </div>
 
-            <!-- Live Stream Thumbnail Canvas -->
+            <!-- Interactive Frame Scrubber & AI Face Review Bar -->
+            <div class="video-scrubber-box margin-top" id="video-enc-scrubber-box" style="display: none;">
+              <div class="scrubber-header">
+                <span id="video-enc-scrubber-label"><b>Frame 1 / 1</b> (0 ms) • Faces in frame: 0</span>
+                <label class="checkbox-inline" style="font-size: 12px;">
+                  <input type="checkbox" id="chk-video-show-ai-overlay" checked>
+                  <span>Show AI Face Outlines &amp; Tracking IDs</span>
+                </label>
+              </div>
+              <input type="range" id="video-enc-frame-slider" min="0" max="0" value="0" class="slider">
+            </div>
+
+            <!-- Live Stream Thumbnail Canvas (hidden helper) -->
             <div class="video-live-frame-box margin-top" id="video-enc-live-box" style="display: none;">
               <div class="live-frame-header">
-                <span><i class="fa-solid fa-bolt" style="color: #f59e0b;"></i> Live Cipher Frame Buffer:</span>
+                <span><i class="fa-solid fa-bolt" style="color: #f59e0b;"></i> Live Frame Buffer:</span>
                 <span class="live-frame-badge" id="live-frame-enc-badge">Frame 0</span>
               </div>
               <div class="live-canvas-wrapper">
@@ -748,25 +1422,25 @@
             <!-- Synchronized Playback Control Bar -->
             <div class="sync-play-bar margin-top">
               <button id="btn-sync-play-enc" class="btn btn-outline btn-sm" disabled>
-                <i class="fa-solid fa-arrows-rotate"></i> Play Both Synchronized
+                <i class="fa-solid fa-play"></i> Play Synchronized Preview
               </button>
               <button id="btn-sync-pause-enc" class="btn btn-outline btn-sm" disabled>
-                <i class="fa-solid fa-pause"></i> Pause Both
+                <i class="fa-solid fa-pause"></i> Pause
               </button>
               <button id="btn-sync-reset-enc" class="btn btn-outline btn-sm" disabled>
-                <i class="fa-solid fa-rotate-left"></i> Rewind (0:00)
+                <i class="fa-solid fa-rotate-left"></i> First Frame (0:00)
               </button>
             </div>
 
             <!-- Performance & Cryptographic Metrics -->
             <div class="metrics-bar margin-top" id="video-enc-metrics-bar" style="display: none;">
               <div class="metric-item">
-                <span class="m-label">Frames Processed</span>
+                <span class="m-label">Encrypted Frames</span>
                 <span class="m-value" id="val-video-enc-frames">0</span>
               </div>
               <div class="metric-item">
-                <span class="m-label">Encoding Speed</span>
-                <span class="m-value" id="val-video-enc-speed">0 FPS</span>
+                <span class="m-label">Avg Frame Enc Time</span>
+                <span class="m-value" id="val-video-enc-speed">0 ms</span>
               </div>
               <div class="metric-item">
                 <span class="m-label">Scramble MSE</span>
@@ -778,98 +1452,122 @@
               </div>
             </div>
 
+            <!-- .kxv Container & AI Performance Summary Card -->
+            <div class="msbx-meta-card margin-top" id="video-enc-kxv-summary" style="display: none;"></div>
+
             <!-- Video Export & Download -->
             <div class="export-box margin-top">
-              <h3><i class="fa-solid fa-cloud-arrow-down"></i> Export & Save Video:</h3>
+              <h3><i class="fa-solid fa-file-shield"></i> Primary Output — Self-Describing Encrypted Video (.kxv):</h3>
+              <p class="export-subtext">
+                Packages lossless PNG-encoded encrypted frames, exact RLE+DEFLATE face masks, frame timestamps, salt, and SHA-256 verification tags into a single <b>encrypted_video.kxv</b> file for 0-different-pixel recovery.
+              </p>
               <div class="action-row">
-                <button id="btn-download-video-enc" class="btn btn-success btn-block" disabled>
-                  <i class="fa-solid fa-download"></i> Download Encrypted Video (.webm)
+                <button id="btn-download-video-kxv" class="btn btn-success btn-block" disabled>
+                  <i class="fa-solid fa-download"></i> Download Encrypted Video (encrypted_video.kxv)
                 </button>
               </div>
-              <button id="btn-goto-decrypt" class="btn btn-outline btn-block" style="margin-top: 10px; display: none; border-color: var(--primary-blue); color: var(--primary-blue);">
-                <i class="fa-solid fa-arrow-right"></i> Open in Decrypt Video Page &rarr;
-              </button>
-              <p class="export-hint" style="margin-top: 8px; font-size: 11.5px; color: var(--text-muted);">
-                <i class="fa-solid fa-circle-check" style="color: var(--accent-emerald);"></i> Standard WebM/VP9 video format — plays smoothly in Chrome, Edge, Firefox, VLC, and Windows Media Player.
-              </p>
+              <details class="secondary-export-details">
+                <summary><i class="fa-solid fa-film"></i> Optional Playable Preview Export (.webm — lossy preview only)</summary>
+                <div class="export-row" style="margin-top: 10px;">
+                  <button id="btn-download-video-enc" class="btn btn-outline btn-sm btn-block" disabled>
+                    <i class="fa-solid fa-file-video"></i> Download Visual Preview (.webm — Not for Lossless Decryption)
+                  </button>
+                </div>
+              </details>
             </div>
 
           </div>
         </div>
       </section>
 
-      <!-- ================= TAB 4: DECRYPT VIDEO (RESTORE & VERIFY) ================= -->
+      <!-- ================= TAB 4: DECRYPT VIDEO (.KXV LOSSLESS RESTORATION & VERIFICATION) ================= -->
       <section id="video-dec-tab" class="tab-pane">
         <div class="grid-2col">
           <!-- Video Decryption Control Panel -->
           <div class="panel glass">
-            <h2 class="panel-title"><i class="fa-solid fa-unlock-keyhole"></i> Video Decryption Controls</h2>
-
-            <!-- Quick Bridge from Encrypt Page -->
-            <div id="dec-bridge-box" style="display: none; margin-bottom: 12px;">
-              <button type="button" class="btn btn-outline btn-block" id="btn-use-last-encrypted" style="border-color: #059669; color: #059669; background: #ecfdf5;">
-                <i class="fa-solid fa-bolt"></i> Use Video Encrypted in Encrypt Page
-              </button>
-            </div>
+            <h2 class="panel-title"><i class="fa-solid fa-unlock-keyhole"></i> Video Decryption Controls (.kxv)</h2>
 
             <!-- Video Upload Drop Zone -->
             <div class="drop-zone" id="video-dec-drop-zone">
-              <input type="file" id="video-dec-file-input" accept="video/*,.webm,.mp4,.mov,.mkv,.avi" class="file-input">
-              <i class="fa-solid fa-cloud-arrow-up drop-icon" id="video-dec-drop-icon"></i>
-              <p class="drop-text" id="video-dec-drop-text">Drag & drop encrypted video here or <span>Browse</span></p>
-              <p class="drop-subtext">Upload the scrambled WebM/MP4 video file</p>
+              <input type="file" id="video-dec-file-input" accept=".kxv,application/octet-stream,video/*,.webm,.mp4" class="file-input">
+              <i class="fa-solid fa-file-shield drop-icon" id="video-dec-drop-icon"></i>
+              <p class="drop-text" id="video-dec-drop-text">Drag &amp; drop <b>encrypted_video.kxv</b> here or <span>Browse</span></p>
+              <p class="drop-subtext">Reads embedded .kxv metadata, exact stored face masks &amp; lossless frames automatically</p>
               <div style="margin-top: 14px;">
-                <span class="btn btn-outline btn-sm" style="background: #ffffff; box-shadow: var(--shadow-sm);">
-                  <i class="fa-solid fa-folder-open"></i> Choose Encrypted Video
+                <span class="btn btn-outline btn-sm" style="background: var(--bg-card); box-shadow: var(--shadow-sm);">
+                  <i class="fa-solid fa-folder-open"></i> Choose Encrypted .kxv File
                 </span>
+              </div>
+            </div>
+
+            <!-- Inline Error Banner for Video Decryption (No Popup Alerts) -->
+            <div class="dec-error-banner" id="video-dec-error-banner" style="display: none;">
+              <i class="fa-solid fa-triangle-exclamation"></i>
+              <div class="dec-error-content">
+                <strong id="video-dec-error-title">Decryption Error</strong>
+                <p id="video-dec-error-msg">Incorrect password/key image or invalid .kxv container.</p>
               </div>
             </div>
 
             <!-- Video File Metadata Chip -->
             <div class="video-meta-chip margin-top" id="video-dec-meta-chip" style="display: none;">
-              <div class="meta-item"><i class="fa-solid fa-file-video"></i> <span id="meta-video-dec-name">encrypted_video.webm</span></div>
+              <div class="meta-item"><i class="fa-solid fa-file-video"></i> <span id="meta-video-dec-name">encrypted_video.kxv</span></div>
               <div class="meta-item"><i class="fa-solid fa-clock"></i> <span id="meta-video-dec-duration">0.0s</span></div>
               <div class="meta-item"><i class="fa-solid fa-expand"></i> <span id="meta-video-dec-res">0 × 0</span></div>
               <div class="meta-item"><i class="fa-solid fa-layer-group"></i> <span id="meta-video-dec-frames">0 frames</span></div>
             </div>
 
-            <!-- Password Key -->
+            <!-- Embedded .kxv Container Metadata Inspector Card -->
+            <div class="msbx-meta-card margin-top" id="video-dec-kxv-meta" style="display: none;"></div>
+
+            <!-- Auto-Detected Scope & Key Type Banner -->
+            <div class="dec-scope-info" id="video-dec-scope-info" style="display: none;">
+              <i class="fa-solid fa-wand-magic-sparkles"></i>
+              <span id="video-dec-scope-info-text">Exact per-frame face masks and key type loaded from .kxv container.</span>
+            </div>
+
+            <!-- Decryption Key Source (Both Password and Key Image Available) -->
             <div class="form-group margin-top">
-              <label for="video-dec-password"><i class="fa-solid fa-key"></i> Video Decryption Key / Password:</label>
-              <div class="password-wrapper">
-                <input type="password" id="video-dec-password" placeholder="Enter matching password used during encryption..." class="form-input">
-                <button type="button" class="pwd-toggle" id="toggle-video-dec-pwd"><i class="fa-solid fa-eye"></i></button>
-              </div>
-              <p class="field-hint">Enter the matching password to invert the 2-MSB permutation and pixel shuffles.</p>
-            </div>
+              <label><i class="fa-solid fa-key"></i> Video Decryption Key:</label>
 
-            <!-- Algorithm Selection -->
-            <div class="form-group">
-              <label for="video-dec-algo-select"><i class="fa-solid fa-shield-halved"></i> Scramble Algorithm:</label>
-              <select id="video-dec-algo-select" class="form-select">
-                <option value="3stage" selected>3-Stage FYP BitShield (Pixel Shuffle + RGB Perm + 2-MSB XOR)</option>
-                <option value="2msb">2-MSB XOR Stream Cipher (Ultra Fast 60FPS)</option>
-                <option value="block">Macroblock Tile Permutation (16×16) + 2-MSB XOR</option>
-              </select>
-            </div>
-
-            <!-- Frame Rate and Resolution Settings -->
-            <div class="settings-grid margin-top">
-              <div class="form-group">
-                <label for="video-dec-fps-select"><i class="fa-solid fa-gauge-high"></i> Target Frame Rate:</label>
-                <select id="video-dec-fps-select" class="form-select">
-                  <option value="15">15 FPS (Fast Processing)</option>
-                  <option value="24" selected>24 FPS (Cinema Standard)</option>
-                  <option value="30">30 FPS (Smooth Web Playback)</option>
-                </select>
+              <!-- Option A: Text Password -->
+              <div id="video-dec-text-key-box" class="key-source-pane">
+                <div class="key-prompt-banner">
+                  <i class="fa-solid fa-pen-to-square"></i>
+                  <span><b>Password:</b> Enter the password used during video encryption</span>
+                </div>
+                <div class="input-with-icon">
+                  <i class="fa-solid fa-lock icon-left"></i>
+                  <input type="password" id="video-dec-password" placeholder="Enter matching password..." class="form-input" autocomplete="off">
+                  <button type="button" class="btn-toggle-pwd" id="toggle-video-dec-pwd"><i class="fa-solid fa-eye"></i></button>
+                </div>
               </div>
 
-              <div class="form-group">
-                <label for="video-dec-scale-select"><i class="fa-solid fa-compress"></i> Resolution Scaling:</label>
-                <select id="video-dec-scale-select" class="form-select">
-                  <option value="optimized" selected>Optimized (Max 640px - Fast & Smooth)</option>
-                  <option value="original">Original Dimensions</option>
-                </select>
+              <div class="dec-or-divider"><span>OR</span></div>
+
+              <!-- Option B: Image as Key -->
+              <div id="video-dec-img-key-box" class="key-source-pane">
+                <div class="key-prompt-banner">
+                  <i class="fa-solid fa-image"></i>
+                  <span><b>Key image:</b> Upload the image used as the video encryption key</span>
+                </div>
+                <div class="key-image-upload-box" id="video-dec-key-image-dropzone">
+                  <input type="file" id="video-dec-key-image-input" accept="image/*" style="display: none;">
+                  <div class="key-img-prompt" id="video-dec-key-img-prompt">
+                    <i class="fa-solid fa-cloud-arrow-up drop-icon" style="font-size: 24px; color: var(--accent-emerald); margin-bottom: 4px;"></i>
+                    <p style="font-size: 13px; font-weight: 600; color: var(--text-main);">Click or Drag &amp; Drop Matching Key Image</p>
+                    <p style="font-size: 11px; color: var(--text-muted);">Upload the identical key image used during video encryption</p>
+                  </div>
+                  <div class="key-img-card" id="video-dec-key-img-card" style="display: none;">
+                    <img id="video-dec-key-img-thumb" src="" alt="Key Thumbnail" class="key-img-thumb">
+                    <div class="key-img-info">
+                      <div class="key-img-name" id="video-dec-key-img-name">key.png</div>
+                      <div class="key-img-meta" id="video-dec-key-img-meta">0 KB</div>
+                      <div class="key-img-hash" id="video-dec-key-img-hash"><i class="fa-solid fa-fingerprint"></i> SHA-256: <span>...</span></div>
+                    </div>
+                    <button type="button" class="btn btn-xs btn-outline" id="btn-video-dec-remove-key-img"><i class="fa-solid fa-xmark"></i></button>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -884,47 +1582,40 @@
               </div>
               <div class="progress-sub">
                 <span id="video-dec-progress-details">Frame 0 / 0</span>
-                <span id="video-dec-progress-eta">ETA: Calculating...</span>
+                <span id="video-dec-progress-eta">Elapsed: 0.0s</span>
               </div>
             </div>
 
             <!-- Action Buttons -->
             <div class="action-row margin-top">
               <button id="btn-process-video-dec" class="btn btn-primary btn-block" disabled>
-                <i class="fa-solid fa-unlock"></i> Decrypt Video Stream
+                <i class="fa-solid fa-unlock"></i> Verify &amp; Restore Original Video Frames
               </button>
               <button id="btn-cancel-video-dec" class="btn btn-outline" style="display: none;">
                 <i class="fa-solid fa-stop"></i> Cancel
               </button>
             </div>
-
-            <div class="fidelity-card margin-top">
-              <div class="fidelity-icon"><i class="fa-solid fa-graduation-cap"></i></div>
-              <div class="fidelity-text">
-                <h4>FYP Academic Decryption Proof:</h4>
-                <p>Inverse permutation operates symmetrically: inverting MSB bitwise XOR, color permutations, and 2D pixel mappings to restore the clear visual stream.</p>
-              </div>
-            </div>
           </div>
 
           <!-- Video Players & Results Panel -->
           <div class="panel glass">
-            <h2 class="panel-title"><i class="fa-solid fa-circle-play"></i> Video Decryption Playback & Comparison</h2>
+            <h2 class="panel-title"><i class="fa-solid fa-circle-play"></i> Restored Video Playback &amp; Zero-Difference Verification</h2>
 
             <!-- Side by side video player preview -->
             <div class="video-players-grid">
               <!-- Left: Encrypted Input Video Box -->
               <div class="video-card">
                 <div class="video-card-header">
-                  <span class="video-tag enc"><i class="fa-solid fa-shield-halved"></i> Encrypted Input</span>
+                  <span class="video-tag enc"><i class="fa-solid fa-shield-halved"></i> Encrypted .kxv Input</span>
                   <span class="video-time-tag" id="video-dec-orig-time">0:00</span>
                 </div>
                 <div class="video-display-area">
+                  <canvas id="canvas-video-dec-orig-frame" class="video-element" style="display: none;"></canvas>
                   <video id="video-dec-orig-player" controls loop playsinline class="video-element" style="display: none;"></video>
                   <div class="no-image-placeholder" id="ph-video-dec-orig">
                     <i class="fa-solid fa-file-video"></i>
-                    <p>No encrypted video loaded</p>
-                    <span class="sub-hint">Upload scrambled video to decrypt</span>
+                    <p>No encrypted .kxv file loaded</p>
+                    <span class="sub-hint">Upload encrypted_video.kxv to inspect &amp; restore</span>
                   </div>
                 </div>
               </div>
@@ -932,74 +1623,90 @@
               <!-- Right: Restored Video Box -->
               <div class="video-card">
                 <div class="video-card-header">
-                  <span class="video-tag restored"><i class="fa-solid fa-circle-check"></i> Restored Video</span>
+                  <span class="video-tag restored"><i class="fa-solid fa-circle-check"></i> Verified Restored Frames</span>
                   <span class="video-time-tag" id="video-dec-result-time">0:00</span>
                 </div>
                 <div class="video-display-area">
-                  <video id="video-dec-result-player" controls autoplay loop playsinline class="video-element" style="display: none;"></video>
+                  <canvas id="canvas-video-dec-result-frame" class="video-element" style="display: none;"></canvas>
+                  <video id="video-dec-result-player" controls loop playsinline class="video-element" style="display: none;"></video>
                   <div class="no-image-placeholder" id="ph-video-dec-result">
                     <i class="fa-solid fa-unlock"></i>
-                    <p>Decrypted video will appear here</p>
-                    <span class="sub-hint">Click "Decrypt Video Stream" to restore</span>
+                    <p>Restored video frames will appear here</p>
+                    <span class="sub-hint">Verified with SHA-256 tag (0 different pixels)</span>
                   </div>
                 </div>
               </div>
             </div>
 
-            <!-- Live Stream Thumbnail Canvas -->
-            <div class="video-live-frame-box margin-top" id="video-dec-live-box" style="display: none;">
-              <div class="live-frame-header">
-                <span><i class="fa-solid fa-bolt" style="color: #059669;"></i> Live Decryption Frame Buffer:</span>
-                <span class="live-frame-badge" id="live-frame-dec-badge">Frame 0</span>
+            <!-- Interactive Frame Scrubber for Decrypted Frames -->
+            <div class="video-scrubber-box margin-top" id="video-dec-scrubber-box" style="display: none;">
+              <div class="scrubber-header">
+                <span id="video-dec-scrubber-label"><b>Frame 1 / 1</b> (0 ms)</span>
+                <label class="checkbox-inline" style="font-size: 12px;">
+                  <input type="checkbox" id="chk-video-dec-show-mask">
+                  <span>Show Stored Face Mask Outline</span>
+                </label>
               </div>
-              <div class="live-canvas-wrapper">
-                <canvas id="canvas-video-dec-thumb"></canvas>
-              </div>
+              <input type="range" id="video-dec-frame-slider" min="0" max="0" value="0" class="slider">
             </div>
 
             <!-- Synchronized Playback Control Bar -->
             <div class="sync-play-bar margin-top">
               <button id="btn-sync-play-dec" class="btn btn-outline btn-sm" disabled>
-                <i class="fa-solid fa-arrows-rotate"></i> Play Both Synchronized
+                <i class="fa-solid fa-play"></i> Play Synchronized Preview
               </button>
               <button id="btn-sync-pause-dec" class="btn btn-outline btn-sm" disabled>
-                <i class="fa-solid fa-pause"></i> Pause Both
+                <i class="fa-solid fa-pause"></i> Pause
               </button>
               <button id="btn-sync-reset-dec" class="btn btn-outline btn-sm" disabled>
-                <i class="fa-solid fa-rotate-left"></i> Rewind (0:00)
+                <i class="fa-solid fa-rotate-left"></i> First Frame (0:00)
               </button>
             </div>
 
             <!-- Performance & Cryptographic Metrics -->
             <div class="metrics-bar margin-top" id="video-dec-metrics-bar" style="display: none;">
               <div class="metric-item">
-                <span class="m-label">Frames Decrypted</span>
-                <span class="m-value" id="val-video-dec-frames">0</span>
+                <span class="m-label">Different Pixels</span>
+                <span class="m-value" id="val-video-dec-diff" style="color: var(--accent-emerald);">0</span>
               </div>
               <div class="metric-item">
-                <span class="m-label">Decoding Speed</span>
-                <span class="m-value" id="val-video-dec-speed">0 FPS</span>
+                <span class="m-label">Restored MSE</span>
+                <span class="m-value" id="val-video-dec-mse">0.0000</span>
               </div>
               <div class="metric-item">
-                <span class="m-label">Restoration Quality</span>
-                <span class="m-value" id="val-video-dec-quality">Lossless Bit-Exact</span>
+                <span class="m-label">Restored PSNR</span>
+                <span class="m-value" id="val-video-dec-psnr">∞ dB</span>
               </div>
               <div class="metric-item">
-                <span class="m-label">Visual Status</span>
-                <span class="m-value" id="val-video-dec-status" style="color: var(--accent-emerald);">Verified</span>
+                <span class="m-label">Avg Frame Dec Time</span>
+                <span class="m-value" id="val-video-dec-speed">0 ms</span>
+              </div>
+            </div>
+
+            <!-- Fidelity Verification Card -->
+            <div class="fidelity-card margin-top" id="video-dec-fidelity-card" style="display: none;">
+              <div class="fidelity-icon"><i class="fa-solid fa-circle-check"></i></div>
+              <div class="fidelity-text">
+                <h4 id="video-dec-fidelity-title">Lossless Video Recovery Verified • 0 Different Pixels</h4>
+                <p id="video-dec-fidelity-desc">All frames verified against embedded SHA-256 authentication tag using exact stored face masks without re-running AI detection.</p>
               </div>
             </div>
 
             <!-- Video Export & Download -->
             <div class="export-box margin-top">
-              <h3><i class="fa-solid fa-cloud-arrow-down"></i> Export & Save Restored Video:</h3>
+              <h3><i class="fa-solid fa-cloud-arrow-down"></i> Export Verified Restored Output:</h3>
               <div class="action-row">
-                <button id="btn-download-video-dec" class="btn btn-success btn-block" disabled>
-                  <i class="fa-solid fa-download"></i> Download Restored Video (.webm)
+                <button id="btn-download-video-dec-png" class="btn btn-success btn-block" disabled>
+                  <i class="fa-solid fa-images"></i> Download Current Verified Frame (Lossless PNG — 0 Diff Pixels)
+                </button>
+              </div>
+              <div class="action-row" style="margin-top: 8px;">
+                <button id="btn-download-video-dec" class="btn btn-outline btn-block" disabled>
+                  <i class="fa-solid fa-film"></i> Export Playable Restored Video (.webm — Optional Browser Video)
                 </button>
               </div>
               <p class="export-hint" style="margin-top: 8px; font-size: 11.5px; color: var(--text-muted);">
-                <i class="fa-solid fa-circle-check" style="color: var(--accent-emerald);"></i> Restored video format (.webm) plays cleanly in all media players and web browsers.
+                <i class="fa-solid fa-circle-check" style="color: var(--accent-emerald);"></i> Lossless PNG frame recovery guarantees <b>0 different pixels (MSE = 0, PSNR = ∞)</b>. Optional WebM export is provided for standard media player convenience.
               </p>
             </div>
 
@@ -1007,7 +1714,251 @@
         </div>
       </section>
 
-      <!-- ================= TAB 4: FYP THEORY & METHODOLOGY ================= -->
+      <!-- ================= TAB 5: DEDICATED READ-ONLY PNG BINARY EXPLORER PAGE (UPLOAD, INSPECT & TEST ONLY) ================= -->
+      <section id="png-explorer-tab" class="tab-pane">
+        <div class="panel glass">
+          <div class="pex-top-header">
+            <div>
+              <h2 class="panel-title">
+                <i class="fa-solid fa-magnifying-glass-chart"></i> PNG Binary Explorer — Read-Only Inspection &amp; Validation Testing
+                <span class="badge-fyp" style="margin-left: 8px; font-size: 11px;">Read-Only Analysis Tool</span>
+              </h2>
+              <p class="section-intro">
+                Upload any existing PNG file (ordinary PNG image, KXBIT encrypted PNG with <code>msBX</code>, or legacy <code>msBx</code> PNG) to inspect its binary chunk structure, view actual bytes in Binary/Hex/Decimal, analyze non-secret encryption metadata, and run a complete integrity &amp; decryption compatibility test report.
+              </p>
+            </div>
+            <div class="pex-quick-actions">
+              <label class="btn btn-primary btn-sm" for="ro-pex-file-input" style="cursor: pointer; margin: 0;">
+                <i class="fa-solid fa-upload"></i> Upload PNG to Inspect
+              </label>
+              <input type="file" id="ro-pex-file-input" accept="image/png,.png" style="display: none;">
+              <button type="button" class="btn btn-outline btn-sm" id="btn-ro-pex-load-active" title="Inspect the encrypted PNG generated on the Encryption page">
+                <i class="fa-solid fa-bolt"></i> Load Active Encrypted PNG
+              </button>
+              <button type="button" class="btn btn-outline btn-sm" id="btn-ro-pex-sample-msbx" title="Load sample KXBIT encrypted PNG (msBX Schema v2)">
+                <i class="fa-solid fa-shield-halved"></i> Sample <code>msBX</code> PNG
+              </button>
+              <button type="button" class="btn btn-outline btn-sm" id="btn-ro-pex-sample-legacy" title="Load sample legacy encrypted PNG (msBx Schema v1)">
+                <i class="fa-solid fa-clock-rotate-left"></i> Sample Legacy <code>msBx</code>
+              </button>
+              <button type="button" class="btn btn-outline btn-sm" id="btn-ro-pex-sample-plain" title="Load sample ordinary unencrypted PNG without KXBIT metadata">
+                <i class="fa-regular fa-image"></i> Sample Ordinary PNG
+              </button>
+            </div>
+          </div>
+
+          <!-- Upload Drop Zone for Existing PNG Files -->
+          <div class="drop-zone margin-top" id="ro-pex-drop-zone" style="padding: 18px;">
+            <i class="fa-solid fa-file-Waveform drop-icon" style="font-size: 26px;"></i>
+            <p class="drop-text" id="ro-pex-drop-text">Drag &amp; drop any <b>.png</b> file here to inspect &amp; test, or <span>Browse</span></p>
+            <p class="drop-subtext">Supports Ordinary PNGs, KXBIT Encrypted PNGs (<code>msBX</code> v1 &amp; v2), and Legacy Encrypted PNGs (<code>msBx</code>) • Strictly Read-Only</p>
+          </div>
+
+          <!-- Uploaded PNG Summary Bar -->
+          <div class="pex-file-summary-bar margin-top" id="ro-pex-summary-bar">
+            <div class="pex-summary-item">
+              <span class="pex-sum-label">Inspected PNG File</span>
+              <span class="pex-sum-val" id="ro-pex-sum-filename">sample_encrypted_photo.png</span>
+            </div>
+            <div class="pex-summary-item">
+              <span class="pex-sum-label">Total PNG Size</span>
+              <span class="pex-sum-val" id="ro-pex-sum-filesize">0 B</span>
+            </div>
+            <div class="pex-summary-item">
+              <span class="pex-sum-label">IHDR Dimensions &amp; Colour</span>
+              <span class="pex-sum-val" id="ro-pex-sum-dims">0 × 0 px</span>
+            </div>
+            <div class="pex-summary-item">
+              <span class="pex-sum-label">KXBIT Metadata Status</span>
+              <span class="pex-sum-val" id="ro-pex-sum-chunk">msBX (Schema v2)</span>
+            </div>
+            <div class="pex-summary-item">
+              <span class="pex-sum-label">Inspection Mode</span>
+              <span class="pex-sum-val" style="color: var(--primary-blue);"><i class="fa-solid fa-lock"></i> Read-Only Analysis</span>
+            </div>
+          </div>
+
+          <!-- 4 Read-Only Inspection & Testing Tabs -->
+          <div class="pex-subtabs margin-top" role="tablist">
+            <button type="button" class="pex-subtab active" data-ro-tab="ro-panel-structure">
+              <i class="fa-solid fa-sitemap"></i> 1. PNG Structure Analysis
+            </button>
+            <button type="button" class="pex-subtab" data-ro-tab="ro-panel-hex">
+              <i class="fa-solid fa-binary"></i> 2. Binary &amp; Hexadecimal Inspection
+            </button>
+            <button type="button" class="pex-subtab" data-ro-tab="ro-panel-metadata">
+              <i class="fa-solid fa-id-card-clip"></i> 3. Metadata Inspection
+            </button>
+            <button type="button" class="pex-subtab" data-ro-tab="ro-panel-testing">
+              <i class="fa-solid fa-clipboard-check"></i> 4. PNG Testing &amp; Validation Report
+            </button>
+          </div>
+
+          <!-- READ-ONLY TAB 1: PNG STRUCTURE ANALYSIS -->
+          <div class="ro-pex-subpanel active" id="ro-panel-structure">
+            <div class="pex-card margin-top">
+              <div class="pex-card-header">
+                <div>
+                  <h3><i class="fa-solid fa-chart-pie"></i> Storage Usage Chart &amp; Section Proportions</h3>
+                  <p class="pex-card-sub" id="ro-pex-size-formula">Total PNG Size = Signature (8 B) + All Chunk Sizes (including 12 B overhead per chunk)</p>
+                </div>
+                <div class="pex-unit-switcher" role="group">
+                  <button type="button" class="btn btn-xs btn-primary ro-unit-btn" data-ro-unit="bytes">Bytes</button>
+                  <button type="button" class="btn btn-xs btn-outline ro-unit-btn" data-ro-unit="kib">KiB</button>
+                  <button type="button" class="btn btn-xs btn-outline ro-unit-btn" data-ro-unit="pct">% of File Size</button>
+                </div>
+              </div>
+              <div class="pex-stacked-bar" id="ro-pex-storage-bar"></div>
+              <div class="pex-storage-legend" id="ro-pex-storage-legend"></div>
+            </div>
+
+            <div class="pex-card margin-top">
+              <div class="pex-card-header">
+                <div>
+                  <h3><i class="fa-solid fa-layer-group"></i> Uploaded PNG Chunk Structure</h3>
+                  <p class="pex-card-sub">Displays actual chunks present in the uploaded PNG file with byte offsets, lengths, CRC-32 values, and validation status.</p>
+                </div>
+              </div>
+              <div class="pex-table-wrap">
+                <table class="pex-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Section / Chunk</th>
+                      <th>Chunk Type &amp; Properties</th>
+                      <th>Byte Offset</th>
+                      <th>Data Length</th>
+                      <th>Overhead</th>
+                      <th>Total Size</th>
+                      <th>% of File</th>
+                      <th>CRC-32 &amp; Status</th>
+                      <th>Purpose &amp; Inspect</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ro-pex-chunks-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- READ-ONLY TAB 2: BINARY & HEXADECIMAL INSPECTION -->
+          <div class="ro-pex-subpanel" id="ro-panel-hex" style="display: none;">
+            <div class="pex-card margin-top">
+              <div class="pex-hex-toolbar">
+                <div class="pex-toolbar-group">
+                  <label for="ro-pex-section-select"><b>Inspect Section:</b></label>
+                  <select id="ro-pex-section-select" class="form-input pex-select-sm"></select>
+                </div>
+
+                <div class="pex-toolbar-group">
+                  <label><b>View Mode:</b></label>
+                  <div class="pex-view-btns">
+                    <button type="button" class="btn btn-xs btn-primary ro-view-mode-btn" data-ro-view="hex">Hexadecimal</button>
+                    <button type="button" class="btn btn-xs btn-outline ro-view-mode-btn" data-ro-view="binary">Binary (8 bits)</button>
+                    <button type="button" class="btn btn-xs btn-outline ro-view-mode-btn" data-ro-view="decimal">Decimal (0–255)</button>
+                    <button type="button" class="btn btn-xs btn-outline ro-view-mode-btn" data-ro-view="decoded">Decoded Metadata View</button>
+                  </div>
+                </div>
+
+                <div class="pex-toolbar-group">
+                  <button type="button" class="btn btn-xs btn-outline" id="btn-ro-hex-prev"><i class="fa-solid fa-chevron-left"></i> Prev Page</button>
+                  <span id="ro-pex-page-label" class="pex-mono-label">Bytes 0..255</span>
+                  <button type="button" class="btn btn-xs btn-outline" id="btn-ro-hex-next">Next Page <i class="fa-solid fa-chevron-right"></i></button>
+                </div>
+              </div>
+
+              <div class="pex-field-pills" id="ro-pex-field-pills"></div>
+
+              <div class="pex-hex-layout">
+                <div class="pex-hex-grid-box" id="ro-pex-hex-grid"></div>
+
+                <!-- Read-Only Selected Byte Inspector (No Editing Controls) -->
+                <div class="pex-byte-inspector">
+                  <h4><i class="fa-solid fa-magnifying-glass"></i> Read-Only Byte Inspector</h4>
+                  <div class="pex-insp-grid">
+                    <div class="pex-insp-row"><span>File Byte Offset:</span><strong id="ro-insp-file-off">0 (0x0000)</strong></div>
+                    <div class="pex-insp-row"><span>Section / Chunk:</span><strong id="ro-insp-section">PNG Signature</strong></div>
+                    <div class="pex-insp-row"><span>Hexadecimal:</span><strong id="ro-insp-hex" class="pex-code-val">0x89</strong></div>
+                    <div class="pex-insp-row"><span>Binary (8 bits):</span><strong id="ro-insp-bin" class="pex-code-val">10001001</strong></div>
+                    <div class="pex-insp-row"><span>Decimal (uint8):</span><strong id="ro-insp-dec" class="pex-code-val">137</strong></div>
+                    <div class="pex-insp-row"><span>ASCII Character:</span><strong id="ro-insp-ascii">.</strong></div>
+                    <div class="pex-insp-row full">
+                      <span>Decoded Field Meaning:</span>
+                      <strong id="ro-insp-field">PNG Signature Byte</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- READ-ONLY TAB 3: METADATA INSPECTION -->
+          <div class="ro-pex-subpanel" id="ro-panel-metadata" style="display: none;">
+            <div class="pex-card margin-top">
+              <div class="pex-card-header">
+                <div>
+                  <h3><i class="fa-solid fa-id-card-clip"></i> Non-Secret Encryption Metadata Inspection</h3>
+                  <p class="pex-card-sub">Decodes embedded <code>msBX</code> (or legacy <code>msBx</code>) parameters without exposing passwords or secret keys.</p>
+                </div>
+                <span class="badge-fyp" id="ro-pex-meta-badge">msBX Metadata</span>
+              </div>
+
+              <!-- Summary Grid for Decoded Non-Secret Metadata (or Ordinary PNG Notice) -->
+              <div id="ro-pex-meta-summary-box"></div>
+
+              <!-- Field-by-Field Table -->
+              <div id="ro-pex-meta-envelope" class="pex-envelope-strip" style="margin-top: 12px;"></div>
+              <div class="pex-table-wrap">
+                <table class="pex-table">
+                  <thead>
+                    <tr>
+                      <th>Metadata Field</th>
+                      <th>Decoded Value</th>
+                      <th>Storage</th>
+                      <th>Chunk Offset / Bit Range</th>
+                      <th>File Byte Offset</th>
+                      <th>Raw Hex / Binary</th>
+                      <th>Explanation &amp; Highlight</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ro-pex-meta-fields-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- READ-ONLY TAB 4: PNG TESTING & VALIDATION REPORT -->
+          <div class="ro-pex-subpanel" id="ro-panel-testing" style="display: none;">
+            <div class="grid-2col margin-top">
+              <div class="pex-card">
+                <h3><i class="fa-solid fa-clipboard-check"></i> Comprehensive PNG &amp; Metadata Testing Report</h3>
+                <p class="pex-card-sub">Evaluates structural integrity, chunk lengths, CRC-32 checksums, metadata schema compliance, duplicate/missing chunks, and dimension consistency.</p>
+                <div class="pex-tier-list" id="ro-pex-test-report-list"></div>
+              </div>
+
+              <div class="pex-card">
+                <h3><i class="fa-solid fa-key"></i> Optional Decryption Compatibility Test (Read-Only)</h3>
+                <p class="pex-card-sub">Provide the candidate password or key image hash to test whether this PNG passes 32-byte SHA-256 verification and decrypts cleanly.</p>
+
+                <div class="form-group margin-top">
+                  <label for="ro-pex-test-key"><i class="fa-solid fa-lock"></i> Candidate Password / Key Image SHA-256 Hex:</label>
+                  <div class="pex-test-key-row">
+                    <input type="password" id="ro-pex-test-key" class="form-input" placeholder="Enter password to test decryption compatibility...">
+                    <button type="button" class="btn btn-primary" id="btn-ro-pex-test-decrypt">
+                      <i class="fa-solid fa-vial-circle-check"></i> Test Key Compatibility
+                    </button>
+                  </div>
+                </div>
+
+                <div id="ro-pex-decrypt-test-result" class="margin-top"></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ================= TAB 6: FYP THEORY & METHODOLOGY ================= -->
       <section id="methodology-tab" class="tab-pane">
         <div class="panel glass">
           <h2 class="panel-title"><i class="fa-solid fa-graduation-cap"></i> FYP Methodology & Mathematical Proof</h2>
@@ -1070,7 +2021,7 @@
        Loaded on demand as an ES module from js/app.js, then refined with an edge-aware guided filter. -->
 
   <!-- Core App Scripts -->
-  <script src="js/bit-engine.js?v=20261106_3"></script>
-  <script src="js/app.js?v=20261106_3"></script>
+  <script src="js/bit-engine.js?v=20261118_1"></script>
+  <script src="js/app.js?v=20261118_1"></script>
 </body>
 </html>
