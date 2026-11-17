@@ -13,7 +13,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
-  <link rel="stylesheet" href="style.css?v=20261118_1">
+  <link rel="stylesheet" href="style.css?v=20261118_2">
   <script>
     (function() {
       try {
@@ -680,7 +680,19 @@
                   <h3><i class="fa-solid fa-toggle-on"></i> Mode B — Advanced Binary &amp; Hex Editor</h3>
                   <p class="pex-card-sub">Select any byte in the <code>msBX</code> metadata payload below, toggle individual bits <code>0 ↔ 1</code>, or type a hexadecimal value directly to observe immediate binary/decimal changes.</p>
 
-                  <!-- Interactive Byte Map of msBX Payload -->
+                  <!-- Interactive Byte Map of msBX Payload (Paginated 128 B/page for huge masks) -->
+                  <div id="pex-editor-byte-pager" class="pex-editor-byte-pager" style="display: none;">
+                    <div class="pex-pager-btns">
+                      <button type="button" class="btn btn-xs btn-outline" id="btn-pex-editor-prev"><i class="fa-solid fa-chevron-left"></i> Prev 128 B</button>
+                      <span id="pex-editor-page-label" class="pex-mono-label">Bytes +0..+127</span>
+                      <button type="button" class="btn btn-xs btn-outline" id="btn-pex-editor-next">Next 128 B <i class="fa-solid fa-chevron-right"></i></button>
+                    </div>
+                    <div class="pex-pager-jump">
+                      <label for="pex-editor-jump-input">Jump to +Byte:</label>
+                      <input type="number" id="pex-editor-jump-input" class="form-input pex-jump-input" min="0" value="0">
+                      <button type="button" class="btn btn-xs btn-outline" id="btn-pex-editor-jump">Go</button>
+                    </div>
+                  </div>
                   <div class="pex-editor-byte-map" id="pex-editor-byte-map"></div>
 
                   <!-- 8-Bit Interactive Bit Flipper + Direct Hex Byte Editor Widget -->
@@ -2021,7 +2033,7 @@
        Loaded on demand as an ES module from js/app.js, then refined with an edge-aware guided filter. -->
 
   <!-- Core App Scripts -->
-  <script src="js/bit-engine.js?v=20261118_1"></script>
-  <script src="js/app.js?v=20261118_1"></script>
+  <script src="js/bit-engine.js?v=20261118_2"></script>
+  <script src="js/app.js?v=20261118_2"></script>
 </body>
 </html>

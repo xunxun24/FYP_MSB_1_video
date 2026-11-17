@@ -786,6 +786,8 @@ const BitEngine = {
     };
   },
 
+  _kdfMemoCache: new Map(),
+
   /**
    * Chapter 4 Iterated SHA-256 Key Derivation Function (KDF):
    * Derives a 32-byte master key from a password (or key-image digest) + 16-byte salt
@@ -795,6 +797,16 @@ const BitEngine = {
     if (!(salt16 instanceof Uint8Array) || salt16.length !== 16) {
       throw new Error("Invalid salt: must be a 16-byte Uint8Array.");
     }
+    const totalIters = Math.max(1, iterations | 0);
+    const keyTag = (passwordOrKey instanceof Uint8Array)
+      ? this.bytesToHex(passwordOrKey)
+      : String(passwordOrKey || '');
+    const cacheKey = `${totalIters}:${this.bytesToHex(salt16)}:${keyTag}`;
+    const cached = this._kdfMemoCache.get(cacheKey);
+    if (cached) {
+      return new Uint8Array(cached);
+    }
+
     const encoder = new TextEncoder();
     const secretBytes = (passwordOrKey instanceof Uint8Array)
       ? passwordOrKey
@@ -806,9 +818,16 @@ const BitEngine = {
     initBuf.set(salt16, secretBytes.length);
     const round0 = sha256Bytes(initBuf);
 
-    const totalIters = Math.max(1, iterations | 0);
-    if (totalIters === 1) return round0;
-    return iterateSha256DigestWithSalt16(round0, salt16, totalIters - 1);
+    const derived = totalIters === 1
+      ? round0
+      : iterateSha256DigestWithSalt16(round0, salt16, totalIters - 1);
+
+    if (this._kdfMemoCache.size >= 16) {
+      const oldestKey = this._kdfMemoCache.keys().next().value;
+      this._kdfMemoCache.delete(oldestKey);
+    }
+    this._kdfMemoCache.set(cacheKey, new Uint8Array(derived));
+    return derived;
   },
 
   /**
@@ -1711,14 +1730,22 @@ const BitEngine = {
 
   encodeMaskDeflate(mask) {
     const rle = this.encodeMaskTrailer(mask);
-    const bitPacked = this.encodeMaskBitPacked(mask);
     const defRle = zlibDeflateSync(rle);
-    const defBp = zlibDeflateSync(bitPacked);
-    const useRleInner = defRle.length <= defBp.length;
-    const chosen = useRleInner ? defRle : defBp;
-    const out = new Uint8Array(1 + chosen.length);
-    out[0] = useRleInner ? 1 : 2; // 1 = RLE+DEFLATE, 2 = BitPacked+DEFLATE
-    out.set(chosen, 1);
+    const expectedBpBytes = Math.ceil(mask.length / 8);
+    // Only compress Bit-Packed if it is small enough to plausibly beat RLE+DEFLATE
+    if (expectedBpBytes <= 32768 && expectedBpBytes < rle.byteLength * 2) {
+      const bitPacked = this.encodeMaskBitPacked(mask);
+      const defBp = zlibDeflateSync(bitPacked);
+      if (defBp.length < defRle.length) {
+        const outBp = new Uint8Array(1 + defBp.length);
+        outBp[0] = 2; // 2 = BitPacked+DEFLATE
+        outBp.set(defBp, 1);
+        return outBp;
+      }
+    }
+    const out = new Uint8Array(1 + defRle.length);
+    out[0] = 1; // 1 = RLE+DEFLATE
+    out.set(defRle, 1);
     return out;
   },
 
@@ -1766,6 +1793,8 @@ const BitEngine = {
     }
   },
 
+  _maskBenchCache: { key: '', result: null },
+
   /**
    * Benchmark all 4 lossless mask storage methods (Raw Binary, Bit-Packed, RLE-Varint, DEFLATE)
    * on a binary mask and select the smallest lossless representation while verifying 0 diff bits.
@@ -1773,6 +1802,21 @@ const BitEngine = {
   benchmarkMaskCompression(mask) {
     const nowFn = () => (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const totalPixels = mask.length;
+
+    // Fast fingerprint over mask length + strided samples so repeated UI refreshes don't re-allocate 4 full masks
+    let fgSum = 0;
+    let hash = totalPixels ^ 0x811c9dc5;
+    const step = Math.max(1, Math.floor(totalPixels / 512));
+    for (let i = 0; i < totalPixels; i += step) {
+      const v = mask[i] ? 1 : 0;
+      fgSum += v;
+      hash = Math.imul(hash ^ ((i << 1) | v), 0x01000193) >>> 0;
+    }
+    const cacheKey = `${totalPixels}:${fgSum}:${hash}`;
+    if (this._maskBenchCache.key === cacheKey && this._maskBenchCache.result) {
+      return this._maskBenchCache.result;
+    }
+
     const codecs = [
       { id: this.MASK_CODEC_RAW, name: 'Raw Binary Mask (1 B/pixel)', shortName: 'Raw Binary' },
       { id: this.MASK_CODEC_BITPACKED, name: 'Bit-Packed Mask (1 bit/pixel)', shortName: 'Bit-Packed' },
@@ -1821,7 +1865,7 @@ const BitEngine = {
       }
     }
 
-    return {
+    const resObj = {
       totalPixels,
       rawMaskBytes: totalPixels,
       bestCodecId: best.codecId,
@@ -1830,6 +1874,8 @@ const BitEngine = {
       bestPayload: best.encodedPayload,
       methods: results
     };
+    this._maskBenchCache = { key: cacheKey, result: resObj };
+    return resObj;
   },
 
   /**
@@ -2090,6 +2136,7 @@ const BitEngine = {
 
     const width = (ihdrDims && ihdrDims.width) ? ihdrDims.width : 0;
     const height = (ihdrDims && ihdrDims.height) ? ihdrDims.height : 0;
+    const headerOnly = !!(ihdrDims && ihdrDims.headerOnly);
 
     let mask = null;
     let encodedMaskBytes = null;
@@ -2110,10 +2157,10 @@ const BitEngine = {
       if (maskByteLen === 0 || pos + maskByteLen > bytes.byteLength) {
         throw new Error("Corrupted or truncated segmentation mask payload in PNG metadata.");
       }
-      encodedMaskBytes = bytes.slice(pos, pos + maskByteLen);
+      encodedMaskBytes = bytes.subarray(pos, pos + maskByteLen);
       pos += maskByteLen;
 
-      if (width > 0 && height > 0) {
+      if (width > 0 && height > 0 && !headerOnly) {
         if (!maskProtected) {
           mask = this.decodeMaskWithCodec(encodedMaskBytes, width * height, maskCodec);
           plainMaskRleBytes = this.encodeMaskTrailer(mask);
@@ -2729,6 +2776,7 @@ const BitEngine = {
 
     return {
       metadata,
+      rawChunkData: activeChunk.data,
       header: {
         ...metadata,
         magic: metadata.identifier,
@@ -2765,8 +2813,7 @@ const BitEngine = {
     // 2. If the segmentation mask was keystream-protected (maskEncoding === 2), decode it now
     if (metadata.maskEncoding === 2) {
       try {
-        const activeChunk = (await this.decodeLosslessPNG(bytes)).chunks.find(c => c.type === activeChunkType);
-        metadata = this.decodeMsBxMetadata(activeChunk.data, masterKey, {
+        metadata = this.decodeMsBxMetadata(inspected.rawChunkData, masterKey, {
           width: previewImageData.width,
           height: previewImageData.height
         });
@@ -5353,8 +5400,29 @@ const BitEngine = {
     let parsedMeta = null;
     if (level1.valid) {
       try {
-        const inspected = await this.inspectEncryptedPNG(bytes);
-        parsedMeta = inspected.metadata;
+        const msBXChunks = structure.chunks.filter(ch => ch.type === this.FYP_PNG_CHUNK_TYPE);
+        const msBxLegacyChunks = structure.chunks.filter(ch => ch.type === this.FYP_LEGACY_PNG_CHUNK_TYPE);
+        if (msBXChunks.length > 0 && msBxLegacyChunks.length > 0) {
+          throw new Error('Conflicting FYP encryption metadata: This PNG file contains both "msBX" and legacy "msBx" metadata chunks.');
+        }
+        if (msBXChunks.length > 1) {
+          throw new Error(`Duplicate FYP encryption metadata: This PNG file contains ${msBXChunks.length} duplicate "${this.FYP_PNG_CHUNK_TYPE}" chunks.`);
+        }
+        if (msBxLegacyChunks.length > 1) {
+          throw new Error(`Duplicate FYP encryption metadata: This PNG file contains ${msBxLegacyChunks.length} duplicate legacy "${this.FYP_LEGACY_PNG_CHUNK_TYPE}" chunks.`);
+        }
+        if (msBXChunks.length === 0 && msBxLegacyChunks.length === 0) {
+          throw new Error('Missing FYP encryption metadata: This PNG file does not contain an embedded msBX (or legacy msBx) decryption metadata chunk.');
+        }
+        const activeChunk = msBXChunks.length === 1 ? msBXChunks[0] : msBxLegacyChunks[0];
+        const isLegacyChunk = activeChunk.type === this.FYP_LEGACY_PNG_CHUNK_TYPE;
+        parsedMeta = this.decodeMsBxMetadata(activeChunk.dataBytes, null, structure.ihdrInfo);
+        parsedMeta.chunkType = activeChunk.type;
+        parsedMeta.isLegacyChunk = isLegacyChunk;
+        parsedMeta.chunkDisplay = isLegacyChunk ? 'msBx (Legacy)' : 'msBX';
+        if (structure.ihdrInfo && (structure.ihdrInfo.width !== parsedMeta.width || structure.ihdrInfo.height !== parsedMeta.height)) {
+          throw new Error(`Inconsistent image dimensions: PNG image is ${structure.ihdrInfo.width}×${structure.ihdrInfo.height}, but embedded metadata specifies ${parsedMeta.width}×${parsedMeta.height}.`);
+        }
         level2 = {
           valid: true,
           status: 'PASS',
@@ -5492,15 +5560,16 @@ const BitEngine = {
     let mask = null;
     let baseImageData = null;
 
+    let sourceStructure = null;
     if (sourcePngBytesOrParams instanceof Uint8Array) {
-      const structure = this.parsePngBinaryStructure(sourcePngBytesOrParams);
-      if (structure.ihdrInfo) {
-        width = structure.ihdrInfo.width;
-        height = structure.ihdrInfo.height;
+      sourceStructure = this.parsePngBinaryStructure(sourcePngBytesOrParams);
+      if (sourceStructure.ihdrInfo) {
+        width = sourceStructure.ihdrInfo.width;
+        height = sourceStructure.ihdrInfo.height;
       }
-      if (structure.msbxSection) {
+      if (sourceStructure.msbxSection) {
         try {
-          const decodedMeta = this.decodeMsBxMetadata(structure.msbxSection.dataBytes, null, { width, height });
+          const decodedMeta = this.decodeMsBxMetadata(sourceStructure.msbxSection.dataBytes, null, { width, height });
           k = decodedMeta.k;
           keyType = decodedMeta.keyType;
           scope = decodedMeta.scope;
@@ -5511,10 +5580,6 @@ const BitEngine = {
           mask = decodedMeta.mask;
         } catch (_) {}
       }
-      try {
-        const decPng = await this.decodeLosslessPNG(sourcePngBytesOrParams);
-        baseImageData = decPng.imageData;
-      } catch (_) {}
     } else if (sourcePngBytesOrParams && typeof sourcePngBytesOrParams === 'object') {
       width = sourcePngBytesOrParams.width || 640;
       height = sourcePngBytesOrParams.height || 480;
@@ -5633,11 +5698,11 @@ const BitEngine = {
 
     let totalPngBefore = 0;
     let totalPngAfter = 0;
-    if (sourcePngBytesOrParams instanceof Uint8Array) {
-      const rebuiltV1 = this.rebuildPngWithModifiedMetadata(sourcePngBytesOrParams, v1Bytes);
-      const rebuiltV2 = this.rebuildPngWithModifiedMetadata(sourcePngBytesOrParams, v2Bytes);
-      totalPngBefore = rebuiltV1.byteLength;
-      totalPngAfter = rebuiltV2.byteLength;
+    if (sourcePngBytesOrParams instanceof Uint8Array && sourceStructure) {
+      const existingMetaChunkSize = sourceStructure.msbxSection ? sourceStructure.msbxSection.totalChunkSize : 0;
+      const nonMetaBytes = Math.max(0, sourcePngBytesOrParams.byteLength - existingMetaChunkSize);
+      totalPngBefore = nonMetaBytes + v1Bytes.byteLength + 12;
+      totalPngAfter = nonMetaBytes + v2Bytes.byteLength + 12;
     } else if (baseImageData) {
       const pngV1 = await this.encodeLosslessPNG(baseImageData, [{ type: 'msBX', data: v1Bytes }]);
       const pngV2 = await this.encodeLosslessPNG(baseImageData, [{ type: 'msBX', data: v2Bytes }]);
