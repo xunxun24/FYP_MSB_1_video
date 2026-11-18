@@ -60,7 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const DOM = {
     tabs: document.querySelectorAll('.nav-tab'),
     tabPanes: document.querySelectorAll('.tab-pane'),
-    
+
     // Encrypt Tab
     encDropZone: document.getElementById('enc-drop-zone'),
     encFileInput: document.getElementById('enc-file-input'),
@@ -194,7 +194,7 @@ document.addEventListener('DOMContentLoaded', () => {
     tab.addEventListener('click', () => {
       DOM.tabs.forEach(t => t.classList.remove('active'));
       DOM.tabPanes.forEach(p => p.classList.remove('active'));
-      
+
       tab.classList.add('active');
       const tabAttr = tab.getAttribute('data-tab');
       const targetPane = document.getElementById(tabAttr);
@@ -236,7 +236,7 @@ document.addEventListener('DOMContentLoaded', () => {
       applyThemeUI(nextTheme);
       try {
         localStorage.setItem('kxbit-theme', nextTheme);
-      } catch (e) {}
+      } catch (e) { }
     });
   }
 
@@ -258,12 +258,97 @@ document.addEventListener('DOMContentLoaded', () => {
   /* ==========================================================================
      Key Image / Visual Cryptography Key Management & Validation
      ========================================================================== */
+  // State for Standard vs. Advanced 3-Stage Encryption Mode
+  state.encMode = 'standard'; // 'standard' | 'advanced'
+  let s1DemoPerm = [5, 2, 7, 0, 6, 1, 4, 3];
+
+  function getUiStageConfigValidation() {
+    if (state.encMode !== 'advanced') {
+      const stdCfg = BitEngine.normalizeStageConfig({
+        encryptionMode: 'standard',
+        stage1Enabled: true,
+        stage1AlgoId: 0,
+        stage2Enabled: true,
+        stage2Mode: 'keyed',
+        stage2FixedPermId: 1,
+        stage3Enabled: true,
+        k: 2,
+        stage3Channels: { r: true, g: true, b: true }
+      }, 2);
+      return { valid: true, error: null, config: stdCfg };
+    }
+
+    const s1On = document.getElementById('adv-s1-enable') ? document.getElementById('adv-s1-enable').checked : true;
+    const s1BlockSize = document.getElementById('adv-s1-block-slider')
+      ? (parseInt(document.getElementById('adv-s1-block-slider').value, 10) || 1)
+      : 1;
+    const s2On = document.getElementById('adv-s2-enable') ? document.getElementById('adv-s2-enable').checked : true;
+    const s3On = document.getElementById('adv-s3-enable') ? document.getElementById('adv-s3-enable').checked : true;
+    const s2Mode = document.getElementById('adv-s2-mode') ? document.getElementById('adv-s2-mode').value : 'keyed';
+    const s2FixedId = document.getElementById('adv-s2-fixed-perm') ? (parseInt(document.getElementById('adv-s2-fixed-perm').value, 10) || 0) : 1;
+    const kVal = document.getElementById('adv-s3-k-slider') ? (parseInt(document.getElementById('adv-s3-k-slider').value, 10) || 2) : 2;
+    const rOn = document.getElementById('adv-s3-ch-r') ? document.getElementById('adv-s3-ch-r').checked : true;
+    const gOn = document.getElementById('adv-s3-ch-g') ? document.getElementById('adv-s3-ch-g').checked : true;
+    const bOn = document.getElementById('adv-s3-ch-b') ? document.getElementById('adv-s3-ch-b').checked : true;
+
+    if (!s1On && !s2On && !s3On) {
+      return {
+        valid: false,
+        error: 'At least one encryption stage (Stage 1, Stage 2, or Stage 3) must be enabled in Advanced Mode.',
+        config: null
+      };
+    }
+    if (s1BlockSize < 1 || s1BlockSize > 32) {
+      return {
+        valid: false,
+        error: 'Stage 1 Pixel Block Size must be an integer between 1 × 1 and 32 × 32 px.',
+        config: null
+      };
+    }
+    if (s3On && !rOn && !gOn && !bOn) {
+      return {
+        valid: false,
+        error: 'Stage 3 is enabled: Please select at least one participating RGB channel (Red, Green, or Blue).',
+        config: null
+      };
+    }
+
+    try {
+      const cfg = BitEngine.normalizeStageConfig({
+        encryptionMode: 'advanced',
+        stage1Enabled: s1On,
+        stage1BlockSize: s1BlockSize,
+        stage2Enabled: s2On,
+        stage2Mode: s2Mode === 'fixed' ? 'fixed' : 'keyed',
+        stage2FixedPermId: s2FixedId,
+        stage3Enabled: s3On,
+        k: kVal,
+        stage3Channels: { r: rOn, g: gOn, b: bOn }
+      }, kVal);
+      return { valid: true, error: null, config: cfg };
+    } catch (err) {
+      return { valid: false, error: err.message || String(err), config: null };
+    }
+  }
+
   function updateEncButtonState() {
     if (!DOM.btnProcessEncrypt) return;
+    const stageCheck = getUiStageConfigValidation();
+    const btnLabel = (state.encMode === 'advanced' && stageCheck.valid && stageCheck.config)
+      ? `<i class="fa-solid fa-wand-magic-sparkles"></i> Execute Advanced Encryption (${stageCheck.config.enabledCount}-Stage)`
+      : '<i class="fa-solid fa-wand-magic-sparkles"></i> Execute 3-Stage Encryption';
+
     if (!state.encImage) {
       DOM.btnProcessEncrypt.disabled = true;
       DOM.btnProcessEncrypt.classList.remove('btn-key-needed');
-      DOM.btnProcessEncrypt.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Execute 3-Stage Encryption';
+      DOM.btnProcessEncrypt.innerHTML = btnLabel;
+      return;
+    }
+
+    if (!stageCheck.valid) {
+      DOM.btnProcessEncrypt.disabled = true;
+      DOM.btnProcessEncrypt.classList.remove('btn-key-needed');
+      DOM.btnProcessEncrypt.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Fix Advanced Stage Settings First';
       return;
     }
 
@@ -288,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     DOM.btnProcessEncrypt.disabled = false;
     DOM.btnProcessEncrypt.classList.remove('btn-key-needed');
-    DOM.btnProcessEncrypt.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Execute 3-Stage Encryption';
+    DOM.btnProcessEncrypt.innerHTML = btnLabel;
   }
 
   function updateDecButtonState() {
@@ -553,7 +638,849 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function initEncryptionModeSystem() {
+    const btnStd = document.getElementById('btn-enc-mode-standard');
+    const btnAdv = document.getElementById('btn-enc-mode-advanced');
+    const radioStd = document.getElementById('radio-enc-mode-standard');
+    const radioAdv = document.getElementById('radio-enc-mode-advanced');
+    const panelStd = document.getElementById('enc-standard-mode-panel');
+    const panelAdv = document.getElementById('enc-advanced-mode-panel');
+    const modeBadge = document.getElementById('enc-active-mode-badge');
+
+    const s1Chk = document.getElementById('adv-s1-enable');
+    const s1Badge = document.getElementById('adv-s1-badge');
+    const s1Card = document.getElementById('adv-card-stage1');
+    const s1BlockSlider = document.getElementById('adv-s1-block-slider');
+    const s1BlockBadge = document.getElementById('adv-s1-block-badge');
+    const btnS1ResetBlock = document.getElementById('btn-adv-s1-reset-block');
+    const s1ReshuffleBtn = document.getElementById('btn-adv-s1-reshuffle');
+    const s1DemoTitle = document.getElementById('adv-s1-demo-title');
+    const s1DemoGrid = document.getElementById('adv-s1-demo-grid');
+    const s1DemoCaption = document.getElementById('adv-s1-demo-caption');
+    const s1PreviewCanvas = document.getElementById('canvas-adv-s1-preview');
+    const s1PreviewScopeTag = document.getElementById('adv-s1-preview-scope-tag');
+    const s1BlockStats = document.getElementById('adv-s1-block-stats');
+
+    const s2Chk = document.getElementById('adv-s2-enable');
+    const s2Badge = document.getElementById('adv-s2-badge');
+    const s2Card = document.getElementById('adv-card-stage2');
+    const s2ModeSel = document.getElementById('adv-s2-mode');
+    const s2FixedGroup = document.getElementById('adv-s2-fixed-group');
+    const s2FixedSel = document.getElementById('adv-s2-fixed-perm');
+    const s2VisualBox = document.getElementById('adv-s2-visual-box');
+    const s2ModeRadioKeyed = document.getElementById('adv-s2-mode-keyed');
+    const s2ModeRadioFixed = document.getElementById('adv-s2-mode-fixed');
+    const lblS2ModeKeyed = document.getElementById('lbl-adv-s2-mode-keyed');
+    const lblS2ModeFixed = document.getElementById('lbl-adv-s2-mode-fixed');
+    const s2KeyedGroup = document.getElementById('adv-s2-keyed-group');
+    const s2AllowedBadge = document.getElementById('adv-s2-allowed-badge');
+    const btnS2ResetPerms = document.getElementById('btn-adv-s2-reset-perms');
+    const s2PermChks = [0, 1, 2, 3, 4, 5].map(i => document.getElementById(`adv-s2-chk-${i}`));
+    const s2PermLbls = [0, 1, 2, 3, 4, 5].map(i => document.getElementById(`lbl-adv-s2-chk-${i}`));
+    const s2FixRadios = [0, 1, 2, 3, 4, 5].map(i => document.getElementById(`adv-s2-fix-${i}`));
+    const s2FixLbls = [0, 1, 2, 3, 4, 5].map(i => document.getElementById(`lbl-adv-s2-fix-${i}`));
+    const s2PreviewCanvas = document.getElementById('canvas-adv-s2-preview');
+    const s2PreviewScopeTag = document.getElementById('adv-s2-preview-scope-tag');
+    const s2PreviewStats = document.getElementById('adv-s2-preview-stats');
+
+    const s3Chk = document.getElementById('adv-s3-enable');
+    const s3Badge = document.getElementById('adv-s3-badge');
+    const s3Card = document.getElementById('adv-card-stage3');
+    const s3KSlider = document.getElementById('adv-s3-k-slider');
+    const s3KBadge = document.getElementById('adv-s3-k-badge');
+    const s3ChR = document.getElementById('adv-s3-ch-r');
+    const s3ChG = document.getElementById('adv-s3-ch-g');
+    const s3ChB = document.getElementById('adv-s3-ch-b');
+    const lblChR = document.getElementById('lbl-adv-ch-r');
+    const lblChG = document.getElementById('lbl-adv-ch-g');
+    const lblChB = document.getElementById('lbl-adv-ch-b');
+    const s3BitplanesEl = document.getElementById('adv-s3-bitplanes');
+    const s3BitsSummaryEl = document.getElementById('adv-s3-bits-summary');
+    const s3PreviewCanvas = document.getElementById('canvas-adv-s3-preview');
+    const s3PreviewScopeTag = document.getElementById('adv-s3-preview-scope-tag');
+    const s3PreviewStats = document.getElementById('adv-s3-preview-stats');
+
+    const summaryTextEl = document.getElementById('adv-pipeline-summary-text');
+    const valBannerEl = document.getElementById('adv-validation-banner');
+    const btnResetAdv = document.getElementById('btn-adv-reset-default');
+
+    const tilePalette = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#4f46e5'];
+    let cachedPreviewSrcImage = null;
+    let cachedPreviewImageData = null;
+
+    function getSyntheticDemoImageData() {
+      const W = 192;
+      const H = 128;
+      const imgData = new ImageData(W, H);
+      const d = imgData.data;
+      const cx = W * 0.5, cy = H * 0.48, rx = W * 0.25, ry = H * 0.34;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4;
+          const dx = (x - cx) / rx;
+          const dy = (y - cy) / ry;
+          if (dx * dx + dy * dy <= 1.0) {
+            // Vivid gradient inside subject oval so block tiles are easy to see
+            d[i] = Math.min(255, Math.round(70 + (x / W) * 180));
+            d[i + 1] = Math.min(255, Math.round(60 + (y / H) * 170));
+            d[i + 2] = Math.min(255, Math.round(230 - (x / W) * 140));
+            d[i + 3] = 255;
+          } else {
+            // Subtle checkerboard background
+            const chk = (((x >> 4) + (y >> 4)) & 1) ? 236 : 216;
+            d[i] = chk;
+            d[i + 1] = chk + 4;
+            d[i + 2] = chk + 10;
+            d[i + 3] = 255;
+          }
+        }
+      }
+      return imgData;
+    }
+
+    function renderStage1LivePreview() {
+      if (!s1PreviewCanvas || !s1BlockStats) return;
+      const s1On = s1Chk ? s1Chk.checked : true;
+      const B = s1BlockSlider ? (parseInt(s1BlockSlider.value, 10) || 1) : 1;
+      const scopeLabels = {
+        full: 'Entire Image',
+        person: 'Body Silhouette',
+        face: 'Face Contour',
+        custom: 'Custom ROI'
+      };
+      const scopeName = scopeLabels[state.encScope] || 'Entire Image';
+
+      if (s1PreviewScopeTag) {
+        s1PreviewScopeTag.className = 'adv-stage-badge ' + (s1On ? 'enabled' : 'disabled');
+        s1PreviewScopeTag.textContent = s1On
+          ? `Scope: ${scopeName} • ${B}×${B} px (${(B * B).toLocaleString()} px/block)`
+          : 'Stage 1 Disabled (No Shuffling)';
+      }
+
+      let srcImageData = null;
+      let activeMask = null;
+      let usingSyntheticSample = false;
+
+      if (state.encImage) {
+        if (cachedPreviewSrcImage !== state.encImage || !cachedPreviewImageData) {
+          const tmpC = document.createElement('canvas');
+          tmpC.width = state.encImage.width;
+          tmpC.height = state.encImage.height;
+          const tCtx = tmpC.getContext('2d', { willReadFrequently: true });
+          tCtx.drawImage(state.encImage, 0, 0);
+          cachedPreviewSrcImage = state.encImage;
+          cachedPreviewImageData = tCtx.getImageData(0, 0, tmpC.width, tmpC.height);
+        }
+        srcImageData = cachedPreviewImageData;
+        activeMask = typeof getActiveScopeMask === 'function' ? getActiveScopeMask() : null;
+      } else {
+        usingSyntheticSample = true;
+        srcImageData = getSyntheticDemoImageData();
+      }
+
+      const W = srcImageData.width;
+      const H = srcImageData.height;
+
+      if (!s1On) {
+        s1PreviewCanvas.width = W;
+        s1PreviewCanvas.height = H;
+        s1PreviewCanvas.getContext('2d').putImageData(srcImageData, 0, 0);
+        s1BlockStats.innerHTML = `
+          <div><strong>Stage 1 is Disabled:</strong> Spatial pixel positions remain in their original <code>(x, y)</code> locations. Enable Stage 1 to shuffle individual pixels (<code>1 × 1 px</code>) or square blocks (<code>2 × 2</code> to <code>32 × 32 px</code>).</div>
+        `;
+        return;
+      }
+
+      const previewRes = BitEngine.previewStage1BlockPermutation(srcImageData, activeMask, B);
+      const part = previewRes.partition;
+      s1PreviewCanvas.width = W;
+      s1PreviewCanvas.height = H;
+      s1PreviewCanvas.getContext('2d').putImageData(previewRes.previewImageData, 0, 0);
+
+      const samplePrefix = usingSyntheticSample
+        ? `<span style="color:var(--primary-blue); font-weight:600;"><i class="fa-solid fa-wand-sparkles"></i> Synthetic Sample Preview (${W}×${H} px) — Upload an image in Step 1 to preview your own photo:</span>`
+        : `<span style="color:var(--accent-emerald); font-weight:600;"><i class="fa-solid fa-check-circle"></i> Active Image (${W}×${H} px) • Region: ${scopeName}:</span>`;
+
+      if (B === 1) {
+        s1BlockStats.innerHTML = `
+          <div>${samplePrefix}</div>
+          <div class="adv-s1-stat-list">
+            <div class="adv-s1-stat-item">Block Size<strong>1 × 1 px (1 px)</strong></div>
+            <div class="adv-s1-stat-item">Shuffled Pixels<strong>${part.totalSelectedPixels.toLocaleString()} px</strong></div>
+            <div class="adv-s1-stat-item">Shuffle Granularity<strong>Fine Single-Pixel</strong></div>
+          </div>
+          <div style="margin-top:6px; font-size:11.5px;">Every selected pixel moves independently to a key-derived destination inside the active region.</div>
+        `;
+      } else if (part.fallbackUsed) {
+        s1BlockStats.innerHTML = `
+          <div>${samplePrefix}</div>
+          <div class="adv-s1-stat-list">
+            <div class="adv-s1-stat-item">Requested Block<strong>${B} × ${B} px (${(B * B).toLocaleString()} px)</strong></div>
+            <div class="adv-s1-stat-item">Complete Blocks<strong>${part.completeBlockCount} (&lt; 2 blocks)</strong></div>
+            <div class="adv-s1-stat-item">Safe Fallback<strong>1 × 1 Pixel (${part.boundaryPixels.toLocaleString()} px)</strong></div>
+          </div>
+          <div style="margin-top:6px; font-size:11.5px; color:#d97706;"><i class="fa-solid fa-shield-halved"></i> Because fewer than 2 complete <code>${B}×${B}</code> blocks fit inside the selected region, Stage 1 automatically falls back to deterministic individual pixel permutation so all ${part.totalSelectedPixels.toLocaleString()} selected pixels are securely scrambled.</div>
+        `;
+      } else {
+        s1BlockStats.innerHTML = `
+          <div>${samplePrefix}</div>
+          <div class="adv-s1-stat-list">
+            <div class="adv-s1-stat-item">Complete ${B}×${B} Blocks<strong>${part.completeBlockCount.toLocaleString()} blocks (${part.completeBlockPixels.toLocaleString()} px)</strong></div>
+            <div class="adv-s1-stat-item">Boundary / Edge Pixels<strong>${part.boundaryPixels.toLocaleString()} px (1×1 shuffle)</strong></div>
+            <div class="adv-s1-stat-item">Outside ROI Pixels<strong>${(W * H - part.totalSelectedPixels).toLocaleString()} px (Untouched)</strong></div>
+          </div>
+          <div style="margin-top:6px; font-size:11.5px;">Complete <code>${B}×${B}</code> blocks inside the region swap intact positions, while the remaining ${part.boundaryPixels.toLocaleString()} irregular boundary/edge pixels are shuffled individually inside the region.</div>
+        `;
+      }
+    }
+
+    window.__refreshStage1LivePreview = () => {
+      renderStage1LivePreview();
+      if (typeof renderStage2LivePreview === 'function') renderStage2LivePreview();
+      if (typeof renderStage3LivePreview === 'function') renderStage3LivePreview();
+    };
+
+    function renderStage1Demo() {
+      if (!s1DemoGrid) return;
+      const s1On = s1Chk ? s1Chk.checked : true;
+      const B = s1BlockSlider ? (parseInt(s1BlockSlider.value, 10) || 1) : 1;
+      const pxPerUnit = B * B;
+      const unitPrefix = B > 1 ? 'B' : 'P';
+
+      if (s1BlockBadge) {
+        s1BlockBadge.textContent = B === 1
+          ? '1 × 1 px — 1 pixel/block (Default)'
+          : `${B} × ${B} px — ${pxPerUnit.toLocaleString()} pixels/block`;
+      }
+
+      if (s1DemoTitle) {
+        s1DemoTitle.innerHTML = B === 1
+          ? `<i class="fa-solid fa-shuffle"></i> <b>Educational Demo:</b> 8-Pixel Fisher–Yates Bijection Shuffle (1 × 1 Individual Pixels P<sub>0</sub>–P<sub>7</sub>)`
+          : `<i class="fa-solid fa-border-all"></i> <b>Educational Demo:</b> 8-Block Fisher–Yates Bijection Shuffle (${B} × ${B} Blocks B<sub>0</sub>–B<sub>7</sub> • ${pxPerUnit.toLocaleString()} px/block)`;
+      }
+
+      const origTiles = [0, 1, 2, 3, 4, 5, 6, 7].map(i =>
+        `<div class="adv-s1-tile" style="background:${tilePalette[i]};" title="${B === 1 ? `Pixel P${i} (1 px)` : `Block B${i} (${B}×${B} = ${pxPerUnit} pixels)`}">${unitPrefix}<sub>${i}</sub><small style="display:block;font-size:9px;opacity:0.88;">${B}×${B}</small></div>`
+      ).join('');
+      const permOrder = s1On ? s1DemoPerm : [0, 1, 2, 3, 4, 5, 6, 7];
+      const permTiles = permOrder.map((srcIdx, dstIdx) =>
+        `<div class="adv-s1-tile" style="background:${tilePalette[srcIdx]};" title="Slot ${dstIdx} receives ${unitPrefix}${srcIdx} (${pxPerUnit} px)">${unitPrefix}<sub>${srcIdx}</sub><small style="display:block;font-size:9px;opacity:0.88;">${B}×${B}</small></div>`
+      ).join('');
+
+      s1DemoGrid.innerHTML = `
+        <div class="adv-s1-row">
+          <span class="adv-s1-row-lbl">Original:</span>
+          <div class="adv-s1-tiles">${origTiles}</div>
+        </div>
+        <div class="adv-s1-row">
+          <span class="adv-s1-row-lbl">${s1On ? 'Shuffled:' : 'Bypassed:'}</span>
+          <div class="adv-s1-tiles">${permTiles}</div>
+        </div>
+      `;
+
+      if (s1DemoCaption) {
+        s1DemoCaption.innerHTML = B === 1
+          ? `<b>1 × 1 Individual Pixel Mode:</b> Each tile <code>P₀–P₇</code> is <b>1 single pixel</b>. Shuffling scatters neighbouring pixels into fine grain across the selected region.`
+          : `<b>${B} × ${B} Block Permutation Mode:</b> Each tile <code>B₀–B₇</code> is a complete <b>${B} × ${B} block (${pxPerUnit.toLocaleString()} pixels)</b> that moves together as an intact square tile, preserving its internal <code>(dx, dy)</code> pixel layout while irregular ROI boundary pixels are permuted individually.`;
+      }
+
+      renderStage1LivePreview();
+    }
+
+    function renderStage2LivePreview() {
+      if (!s2PreviewCanvas || !s2PreviewStats) return;
+      const s2On = s2Chk ? s2Chk.checked : true;
+      const mode = s2ModeSel ? s2ModeSel.value : 'keyed';
+      const fixedId = s2FixedSel ? (parseInt(s2FixedSel.value, 10) || 0) : 1;
+      const s1On = s1Chk ? s1Chk.checked : true;
+      const B = s1BlockSlider ? (parseInt(s1BlockSlider.value, 10) || 1) : 1;
+
+      let allowedIds = [];
+      for (let i = 0; i < 6; i++) {
+        if (s2PermChks[i] && s2PermChks[i].checked) allowedIds.push(i);
+      }
+      if (allowedIds.length === 0) allowedIds = [0, 1, 2, 3, 4, 5];
+
+      const scopeLabels = {
+        full: 'Entire Image',
+        person: 'Body Silhouette',
+        face: 'Face Contour',
+        custom: 'Custom ROI'
+      };
+      const scopeName = scopeLabels[state.encScope] || 'Entire Image';
+
+      if (s2PreviewScopeTag) {
+        s2PreviewScopeTag.className = 'adv-stage-badge ' + (!s2On ? 'disabled' : (mode === 'fixed' ? 'experimental' : 'enabled'));
+        s2PreviewScopeTag.textContent = !s2On
+          ? 'Stage 2 Disabled'
+          : (mode === 'fixed'
+            ? `Fixed ${BitEngine.CHANNEL_PERM_LABELS[fixedId] || 'RGB'} • ${scopeName}`
+            : `Key-Driven (${allowedIds.length}/6 Perms) • ${scopeName}`);
+      }
+
+      let srcImageData = null;
+      let activeMask = null;
+      let usingSyntheticSample = false;
+
+      if (state.encImage) {
+        if (cachedPreviewSrcImage !== state.encImage || !cachedPreviewImageData) {
+          const tmpC = document.createElement('canvas');
+          tmpC.width = state.encImage.width;
+          tmpC.height = state.encImage.height;
+          const tCtx = tmpC.getContext('2d', { willReadFrequently: true });
+          tCtx.drawImage(state.encImage, 0, 0);
+          cachedPreviewSrcImage = state.encImage;
+          cachedPreviewImageData = tCtx.getImageData(0, 0, tmpC.width, tmpC.height);
+        }
+        srcImageData = cachedPreviewImageData;
+        activeMask = typeof getActiveScopeMask === 'function' ? getActiveScopeMask() : null;
+      } else {
+        usingSyntheticSample = true;
+        srcImageData = getSyntheticDemoImageData();
+      }
+
+      const W = srcImageData.width;
+      const H = srcImageData.height;
+      const previewRes = BitEngine.previewStage2ChannelPermutation(srcImageData, activeMask, {
+        encryptionMode: 'advanced',
+        stage1Enabled: s1On,
+        stage1BlockSize: B,
+        stage2Enabled: s2On,
+        stage2Mode: mode,
+        stage2FixedPermId: fixedId,
+        stage2AllowedIds: allowedIds,
+        stage3Enabled: false
+      });
+
+      s2PreviewCanvas.width = W;
+      s2PreviewCanvas.height = H;
+      s2PreviewCanvas.getContext('2d').putImageData(previewRes.previewImageData, 0, 0);
+
+      const samplePrefix = usingSyntheticSample
+        ? `<span style="color:var(--primary-blue); font-weight:600;"><i class="fa-solid fa-wand-sparkles"></i> Synthetic Sample Preview (${W}×${H} px) — Upload an image in Step 1 to preview your photo:</span>`
+        : `<span style="color:var(--accent-emerald); font-weight:600;"><i class="fa-solid fa-check-circle"></i> Active Image (${W}×${H} px) • Region: ${scopeName}:</span>`;
+
+      if (!s2On) {
+        s2PreviewStats.innerHTML = `
+          <div>${samplePrefix}</div>
+          <div style="margin-top:6px;"><strong>Stage 2 Disabled:</strong> Original RGB channel ordering is preserved${s1On ? ' after Stage 1 spatial shuffling' : ''}.</div>
+        `;
+      } else if (mode === 'fixed') {
+        const permLabel = BitEngine.CHANNEL_PERM_LABELS[fixedId] || 'RGB';
+        s2PreviewStats.innerHTML = `
+          <div>${samplePrefix}</div>
+          <div class="adv-s1-stat-list">
+            <div class="adv-s1-stat-item">Stage 2 Mode<strong>Fixed RGB Order</strong></div>
+            <div class="adv-s1-stat-item">Arrangement<strong>${permLabel}</strong></div>
+            <div class="adv-s1-stat-item">Scope<strong>${scopeName}</strong></div>
+          </div>
+          <div style="margin-top:6px; font-size:11.5px;">Every pixel in the region has its channels mapped uniformly to <b>${permLabel}</b>${s1On ? ` (after ${B}×${B} Stage 1 shuffle)` : ''}.</div>
+        `;
+      } else {
+        const allowedLabels = allowedIds.map(id => BitEngine.CHANNEL_PERM_LABELS[id]).join(', ');
+        s2PreviewStats.innerHTML = `
+          <div>${samplePrefix}</div>
+          <div class="adv-s1-stat-list">
+            <div class="adv-s1-stat-item">Stage 2 Mode<strong>Key-Driven Dynamic</strong></div>
+            <div class="adv-s1-stat-item">Allowed Pool<strong>${allowedIds.length} / 6 Perms</strong></div>
+            <div class="adv-s1-stat-item">Active Set<strong>${allowedLabels}</strong></div>
+          </div>
+          <div style="margin-top:6px; font-size:11.5px;">Illustrative pre-key preview: each pixel draws from <code>[${allowedLabels}]</code>. Actual encryption uses your secret password or key image.</div>
+        `;
+      }
+    }
+
+    function renderStage2Visual() {
+      if (!s2VisualBox) return;
+      const s2On = s2Chk ? s2Chk.checked : true;
+      const mode = s2ModeSel ? s2ModeSel.value : 'keyed';
+      const fixedId = s2FixedSel ? (parseInt(s2FixedSel.value, 10) || 0) : 1;
+      if (s2KeyedGroup) {
+        s2KeyedGroup.style.display = (s2On && mode === 'keyed') ? 'block' : 'none';
+      }
+      if (s2FixedGroup) {
+        s2FixedGroup.style.display = (s2On && mode === 'fixed') ? 'block' : 'none';
+      }
+
+      const sampleRgb = [255, 100, 50];
+      const chNames = ['R', 'G', 'B'];
+      const chCls = ['r', 'g', 'b'];
+
+      const allowedIds = [];
+      for (let i = 0; i < 6; i++) {
+        if (s2PermChks[i] && s2PermChks[i].checked) allowedIds.push(i);
+      }
+
+      if (!s2On) {
+        s2VisualBox.innerHTML = `
+          <div class="adv-demo-header">
+            <span><i class="fa-solid fa-palette"></i> <b>Example Pixel Transformation:</b> Stage 2 Disabled (Channels Unchanged: RGB → RGB)</span>
+          </div>
+          <div class="adv-s2-flow">
+            <div class="adv-s2-rgb-group">
+              <span class="adv-color-swatch" style="background: rgb(255, 100, 50);" title="Input RGB(255, 100, 50)"></span>
+              <span class="adv-rgb-pill r">R = 255</span>
+              <span class="adv-rgb-pill g">G = 100</span>
+              <span class="adv-rgb-pill b">B = 50</span>
+            </div>
+            <i class="fa-solid fa-arrow-right" style="color: var(--text-muted);"></i>
+            <div class="adv-s2-rgb-group">
+              <span class="adv-rgb-pill r">Out R ← R (255)</span>
+              <span class="adv-rgb-pill g">Out G ← G (100)</span>
+              <span class="adv-rgb-pill b">Out B ← B (50)</span>
+              <span class="adv-color-swatch" style="background: rgb(255, 100, 50);" title="Unchanged RGB(255, 100, 50)"></span>
+            </div>
+          </div>
+        `;
+      } else if (mode === 'fixed') {
+        const pOrder = BitEngine.CHANNEL_PERMS[fixedId] || [0, 1, 2];
+        const outR = sampleRgb[pOrder[0]];
+        const outG = sampleRgb[pOrder[1]];
+        const outB = sampleRgb[pOrder[2]];
+        const permName = BitEngine.CHANNEL_PERM_LABELS[fixedId] || 'RGB';
+
+        s2VisualBox.innerHTML = `
+          <div class="adv-demo-header">
+            <span><i class="fa-solid fa-palette"></i> <b>Fixed RGB Order Example:</b> ${permName} ([R,G,B] → [${chNames[pOrder[0]]},${chNames[pOrder[1]]},${chNames[pOrder[2]]}])</span>
+            <span class="adv-stage-badge experimental">Uniform Mapping</span>
+          </div>
+          <div class="adv-s2-flow">
+            <div class="adv-s2-rgb-group">
+              <span class="adv-color-swatch" style="background: rgb(255, 100, 50);" title="Original RGB(255, 100, 50)"></span>
+              <span class="adv-rgb-pill r">R = 255</span>
+              <span class="adv-rgb-pill g">G = 100</span>
+              <span class="adv-rgb-pill b">B = 50</span>
+            </div>
+            <i class="fa-solid fa-arrow-right" style="color: var(--text-muted);"></i>
+            <div class="adv-s2-rgb-group">
+              <span class="adv-rgb-pill ${chCls[pOrder[0]]}">Out R ← ${chNames[pOrder[0]]} (${outR})</span>
+              <span class="adv-rgb-pill ${chCls[pOrder[1]]}">Out G ← ${chNames[pOrder[1]]} (${outG})</span>
+              <span class="adv-rgb-pill ${chCls[pOrder[2]]}">Out B ← ${chNames[pOrder[2]]} (${outB})</span>
+              <span class="adv-color-swatch" style="background: rgb(${outR}, ${outG}, ${outB});" title="Output ${permName}(${outR}, ${outG}, ${outB})"></span>
+            </div>
+          </div>
+        `;
+      } else {
+        const sampleIds = allowedIds.slice(0, 3);
+        const examplesHtml = sampleIds.length === 0
+          ? `<div style="color:#dc2626; font-size:12px; font-weight:600;"><i class="fa-solid fa-triangle-exclamation"></i> Please select at least one allowed RGB permutation above.</div>`
+          : sampleIds.map(id => {
+              const pOrder = BitEngine.CHANNEL_PERMS[id];
+              const lbl = BitEngine.CHANNEL_PERM_LABELS[id];
+              const oR = sampleRgb[pOrder[0]];
+              const oG = sampleRgb[pOrder[1]];
+              const oB = sampleRgb[pOrder[2]];
+              return `
+                <div class="adv-s2-rgb-group" style="background:var(--bg-subtle); padding:4px 8px; border-radius:6px; border:1px solid var(--border-light);">
+                  <strong style="font-family:'JetBrains Mono',monospace; font-size:11px; min-width:30px;">${lbl}:</strong>
+                  <span class="adv-color-swatch" style="background: rgb(${oR}, ${oG}, ${oB}); width:18px; height:18px;" title="${lbl}(${oR}, ${oG}, ${oB})"></span>
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">(${oR}, ${oG}, ${oB})</span>
+                </div>
+              `;
+            }).join('');
+
+        s2VisualBox.innerHTML = `
+          <div class="adv-demo-header">
+            <span><i class="fa-solid fa-palette"></i> <b>Key-Driven Dynamic Example:</b> Illustrative mappings from your ${allowedIds.length} selected permutation${allowedIds.length === 1 ? '' : 's'}</span>
+          </div>
+          <div class="adv-s2-flow" style="align-items: center;">
+            <div class="adv-s2-rgb-group">
+              <span class="adv-color-swatch" style="background: rgb(255, 100, 50);" title="Original RGB(255, 100, 50)"></span>
+              <span class="adv-rgb-pill r">R = 255</span>
+              <span class="adv-rgb-pill g">G = 100</span>
+              <span class="adv-rgb-pill b">B = 50</span>
+            </div>
+            <i class="fa-solid fa-arrow-right" style="color: var(--text-muted);"></i>
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              ${examplesHtml}
+            </div>
+          </div>
+        `;
+      }
+
+      renderStage2LivePreview();
+    }
+
+    function renderStage3BitPlanes() {
+      if (!s3BitplanesEl) return;
+      const s3On = s3Chk ? s3Chk.checked : true;
+      const k = s3KSlider ? (parseInt(s3KSlider.value, 10) || 2) : 2;
+      const rOn = s3ChR ? s3ChR.checked : true;
+      const gOn = s3ChG ? s3ChG.checked : true;
+      const bOn = s3ChB ? s3ChB.checked : true;
+
+      if (DOM.encKSelect) DOM.encKSelect.value = String(k);
+      if (s3KBadge) {
+        const lowBit = 8 - k;
+        s3KBadge.textContent = k === 1
+          ? 'k = 1 bit (Top MSB: b₇)'
+          : `k = ${k} bits (Top ${k} MSBs: b₇..b${lowBit})`;
+      }
+
+      if (lblChR) lblChR.classList.toggle('active', rOn);
+      if (lblChG) lblChG.classList.toggle('active', gOn);
+      if (lblChB) lblChB.classList.toggle('active', bOn);
+
+      const channels = [
+        { name: 'Red (R)', color: '#dc2626', enabled: s3On && rOn },
+        { name: 'Green (G)', color: '#059669', enabled: s3On && gOn },
+        { name: 'Blue (B)', color: '#2563eb', enabled: s3On && bOn }
+      ];
+
+      let activeChannelCount = 0;
+      s3BitplanesEl.innerHTML = channels.map(ch => {
+        if (ch.enabled) activeChannelCount++;
+        const cellsHtml = [7, 6, 5, 4, 3, 2, 1, 0].map(bit => {
+          const isXor = ch.enabled && (bit >= 8 - k);
+          return `
+            <div class="adv-bp-cell ${isXor ? 'xor-active' : ''}">
+              <div>b<sub>${bit}</sub>${bit === 7 ? ' (MSB)' : (bit === 0 ? ' (LSB)' : '')}</div>
+              <div>${isXor ? 'XOR Key' : 'Keep'}</div>
+            </div>
+          `;
+        }).join('');
+        return `
+          <div class="adv-bitplane-row ${ch.enabled ? '' : 'ch-off'}">
+            <span class="adv-bp-label" style="color:${ch.color};">${ch.name}</span>
+            <div class="adv-bp-cells">${cellsHtml}</div>
+          </div>
+        `;
+      }).join('');
+
+      if (s3BitsSummaryEl) {
+        const totalXorBits = s3On ? (activeChannelCount * k) : 0;
+        s3BitsSummaryEl.textContent = `${totalXorBits} / 24 bits XORed per pixel (${activeChannelCount} channel${activeChannelCount === 1 ? '' : 's'} × k=${k})`;
+      }
+
+      renderStage3LivePreview();
+    }
+
+    function renderStage3LivePreview() {
+      if (!s3PreviewCanvas || !s3PreviewStats) return;
+      const s1On = s1Chk ? s1Chk.checked : true;
+      const B = s1BlockSlider ? (parseInt(s1BlockSlider.value, 10) || 1) : 1;
+      const s2On = s2Chk ? s2Chk.checked : true;
+      const mode = s2ModeSel ? s2ModeSel.value : 'keyed';
+      const fixedId = s2FixedSel ? (parseInt(s2FixedSel.value, 10) || 0) : 1;
+      const s3On = s3Chk ? s3Chk.checked : true;
+      const k = s3KSlider ? (parseInt(s3KSlider.value, 10) || 2) : 2;
+      const rOn = s3ChR ? s3ChR.checked : true;
+      const gOn = s3ChG ? s3ChG.checked : true;
+      const bOn = s3ChB ? s3ChB.checked : true;
+
+      let allowedIds = [];
+      for (let i = 0; i < 6; i++) {
+        if (s2PermChks[i] && s2PermChks[i].checked) allowedIds.push(i);
+      }
+      if (allowedIds.length === 0) allowedIds = [0, 1, 2, 3, 4, 5];
+
+      const scopeLabels = {
+        full: 'Entire Image',
+        person: 'Body Silhouette',
+        face: 'Face Contour',
+        custom: 'Custom ROI'
+      };
+      const scopeName = scopeLabels[state.encScope] || 'Entire Image';
+
+      if (s3PreviewScopeTag) {
+        const hasCh = rOn || gOn || bOn;
+        s3PreviewScopeTag.className = 'adv-stage-badge ' + (!s3On ? 'disabled' : (hasCh ? 'enabled' : 'experimental'));
+        s3PreviewScopeTag.textContent = !s3On
+          ? 'Stage 3 Disabled'
+          : (hasCh ? `k=${k} MSB XOR • ${scopeName}` : 'Select Channel!');
+      }
+
+      let srcImageData = null;
+      let activeMask = null;
+      let usingSyntheticSample = false;
+
+      if (state.encImage) {
+        if (cachedPreviewSrcImage !== state.encImage || !cachedPreviewImageData) {
+          const tmpC = document.createElement('canvas');
+          tmpC.width = state.encImage.width;
+          tmpC.height = state.encImage.height;
+          const tCtx = tmpC.getContext('2d', { willReadFrequently: true });
+          tCtx.drawImage(state.encImage, 0, 0);
+          cachedPreviewSrcImage = state.encImage;
+          cachedPreviewImageData = tCtx.getImageData(0, 0, tmpC.width, tmpC.height);
+        }
+        srcImageData = cachedPreviewImageData;
+        activeMask = typeof getActiveScopeMask === 'function' ? getActiveScopeMask() : null;
+      } else {
+        usingSyntheticSample = true;
+        srcImageData = getSyntheticDemoImageData();
+      }
+
+      const W = srcImageData.width;
+      const H = srcImageData.height;
+
+      const noChannels = s3On && !rOn && !gOn && !bOn;
+      const previewRes = BitEngine.previewStage3MsbXor(srcImageData, activeMask, {
+        encryptionMode: 'advanced',
+        stage1Enabled: s1On,
+        stage1BlockSize: B,
+        stage2Enabled: s2On,
+        stage2Mode: mode,
+        stage2FixedPermId: fixedId,
+        stage2AllowedIds: allowedIds,
+        stage3Enabled: s3On && !noChannels,
+        k,
+        stage3Channels: { r: rOn, g: gOn, b: bOn }
+      });
+
+      s3PreviewCanvas.width = W;
+      s3PreviewCanvas.height = H;
+      s3PreviewCanvas.getContext('2d').putImageData(previewRes.previewImageData, 0, 0);
+
+      const samplePrefix = usingSyntheticSample
+        ? `<span style="color:var(--primary-blue); font-weight:600;"><i class="fa-solid fa-wand-sparkles"></i> Synthetic Sample Preview (${W}×${H} px) — Upload an image in Step 1 to preview your photo:</span>`
+        : `<span style="color:var(--accent-emerald); font-weight:600;"><i class="fa-solid fa-check-circle"></i> Active Image (${W}×${H} px) • Region: ${scopeName}:</span>`;
+
+      const chList = [];
+      if (rOn) chList.push('R');
+      if (gOn) chList.push('G');
+      if (bOn) chList.push('B');
+      const chStr = chList.join(', ') || 'None';
+
+      if (!s3On) {
+        s3PreviewStats.innerHTML = `
+          <div>${samplePrefix}</div>
+          <div style="margin-top:6px;"><strong>Stage 3 Disabled:</strong> Shows cumulative output from Stage 1${s2On ? ' + Stage 2' : ''} without <i>k</i>-MSB XOR masking.</div>
+        `;
+      } else if (noChannels) {
+        s3PreviewStats.innerHTML = `
+          <div>${samplePrefix}</div>
+          <div style="margin-top:6px; color:#dc2626;"><strong>No Channel Selected:</strong> Select at least one RGB channel (Red, Green, or Blue) for Stage 3 XOR.</div>
+        `;
+      } else {
+        const s1Label = s1On ? `${B}×${B} px` : 'OFF';
+        const s2Label = !s2On ? 'OFF' : (mode === 'fixed' ? `Fixed ${BitEngine.CHANNEL_PERM_LABELS[fixedId] || 'RGB'}` : `Keyed (${allowedIds.length}/6)`);
+        s3PreviewStats.innerHTML = `
+          <div>${samplePrefix}</div>
+          <div class="adv-s1-stat-list">
+            <div class="adv-s1-stat-item">Stage 1<strong>${s1Label}</strong></div>
+            <div class="adv-s1-stat-item">Stage 2<strong>${s2Label}</strong></div>
+            <div class="adv-s1-stat-item">Stage 3 XOR<strong>k=${k} (${chStr})</strong></div>
+          </div>
+          <div style="margin-top:6px; font-size:11.5px;">Illustrative pre-key 3-stage pipeline preview: <b>${chList.length * k} / 24 bits</b> XORed per pixel inside <b>${scopeName}</b>.</div>
+        `;
+      }
+    }
+
+    function syncAdvancedStageUI() {
+      const s1On = s1Chk ? s1Chk.checked : true;
+      const s1BlockSize = s1BlockSlider ? (parseInt(s1BlockSlider.value, 10) || 1) : 1;
+      const s2On = s2Chk ? s2Chk.checked : true;
+      const s3On = s3Chk ? s3Chk.checked : true;
+      const s2Mode = s2ModeSel ? s2ModeSel.value : 'keyed';
+      const s2FixedId = s2FixedSel ? (parseInt(s2FixedSel.value, 10) || 0) : 1;
+      const k = s3KSlider ? (parseInt(s3KSlider.value, 10) || 2) : 2;
+      const rOn = s3ChR ? s3ChR.checked : true;
+      const gOn = s3ChG ? s3ChG.checked : true;
+      const bOn = s3ChB ? s3ChB.checked : true;
+
+      if (s2ModeRadioKeyed) s2ModeRadioKeyed.checked = (s2Mode !== 'fixed');
+      if (s2ModeRadioFixed) s2ModeRadioFixed.checked = (s2Mode === 'fixed');
+      if (lblS2ModeKeyed) lblS2ModeKeyed.classList.toggle('active', s2Mode !== 'fixed');
+      if (lblS2ModeFixed) lblS2ModeFixed.classList.toggle('active', s2Mode === 'fixed');
+
+      let s2AllowedCount = 0;
+      for (let i = 0; i < 6; i++) {
+        const isChk = s2PermChks[i] ? s2PermChks[i].checked : true;
+        if (isChk) s2AllowedCount++;
+        if (s2PermLbls[i]) s2PermLbls[i].classList.toggle('active', isChk);
+        if (s2FixRadios[i]) s2FixRadios[i].checked = (i === s2FixedId);
+        if (s2FixLbls[i]) s2FixLbls[i].classList.toggle('active', i === s2FixedId);
+      }
+
+      if (s2AllowedBadge) {
+        if (s2AllowedCount === 0) {
+          s2AllowedBadge.textContent = '0 of 6 selected (Select at least 1!)';
+        } else if (s2AllowedCount === 6) {
+          s2AllowedBadge.textContent = '6 of 6 permutations active (full S₃)';
+        } else {
+          s2AllowedBadge.textContent = `${s2AllowedCount} of 6 permutations active`;
+        }
+      }
+
+      if (s1Card) s1Card.classList.toggle('stage-disabled', !s1On);
+      if (s2Card) s2Card.classList.toggle('stage-disabled', !s2On);
+      if (s3Card) s3Card.classList.toggle('stage-disabled', !s3On);
+
+      if (s1Badge) {
+        s1Badge.className = 'adv-stage-badge ' + (s1On ? 'enabled' : 'disabled');
+        s1Badge.textContent = s1On ? `ENABLED (${s1BlockSize}×${s1BlockSize} px)` : 'DISABLED';
+      }
+      if (s2Badge) {
+        const isFixed = s2On && s2Mode === 'fixed';
+        const isErr = s2On && s2Mode === 'keyed' && s2AllowedCount === 0;
+        s2Badge.className = 'adv-stage-badge ' + (!s2On ? 'disabled' : ((isFixed || isErr) ? 'experimental' : 'enabled'));
+        s2Badge.textContent = !s2On
+          ? 'DISABLED'
+          : (isErr
+            ? 'SELECT PERMUTATION!'
+            : (isFixed
+              ? `ENABLED (Fixed ${BitEngine.CHANNEL_PERM_LABELS[s2FixedId] || 'RGB'})`
+              : (s2AllowedCount === 6 ? 'ENABLED (Key-Driven)' : `ENABLED (Key-Driven • ${s2AllowedCount}/6 Perms)`)));
+      }
+      if (s3Badge) {
+        const chArr = [];
+        if (rOn) chArr.push('R');
+        if (gOn) chArr.push('G');
+        if (bOn) chArr.push('B');
+        const hasErr = s3On && chArr.length === 0;
+        s3Badge.className = 'adv-stage-badge ' + (!s3On ? 'disabled' : (hasErr ? 'experimental' : 'enabled'));
+        s3Badge.textContent = !s3On
+          ? 'DISABLED'
+          : (hasErr ? 'SELECT CHANNEL!' : `ENABLED (k=${k} • ${chArr.join(',')})`);
+      }
+
+      renderStage1Demo();
+      renderStage2Visual();
+      renderStage3BitPlanes();
+
+      const check = getUiStageConfigValidation();
+      if (summaryTextEl) {
+        summaryTextEl.innerHTML = check.valid && check.config
+          ? `<b>Active Pipeline:</b> ${check.config.enabledStagesSummary}`
+          : `<b style="color:#ef4444;">Invalid Pipeline Configuration:</b> ${check.error}`;
+      }
+
+      const hasWeakerSecuritySetting = (!s1On || !s2On || !s3On || s2Mode === 'fixed' || !rOn || !gOn || !bOn);
+      if (valBannerEl) {
+        if (!check.valid) {
+          valBannerEl.style.display = 'flex';
+          valBannerEl.className = 'adv-validation-banner error';
+          valBannerEl.innerHTML = `<i class="fa-solid fa-circle-xmark"></i><div><strong>Configuration Error:</strong> ${check.error}</div>`;
+        } else if (hasWeakerSecuritySetting) {
+          valBannerEl.style.display = 'flex';
+          valBannerEl.className = 'adv-validation-banner warn';
+          valBannerEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i><div><strong>Experimental Configuration (Potentially Weaker Security):</strong> You have disabled one or more stages, selected a fixed RGB permutation, or excluded colour channels. While 100% reversible via <code>msBX</code> metadata, full 3-stage keyed encryption is recommended for maximum security.</div>`;
+        } else {
+          valBannerEl.style.display = 'none';
+          valBannerEl.innerHTML = '';
+        }
+      }
+
+      if (modeBadge) {
+        if (state.encMode === 'standard') {
+          modeBadge.textContent = 'Standard 3-Stage Mode';
+        } else if (check.valid && check.config) {
+          modeBadge.textContent = hasWeakerSecuritySetting
+            ? `Advanced Mode (${check.config.enabledCount}-Stage Experimental)`
+            : `Advanced Mode (3-Stage Custom • ${s1BlockSize}×${s1BlockSize} px • k=${check.config.k})`;
+        } else {
+          modeBadge.textContent = 'Advanced Mode (Check Settings)';
+        }
+      }
+
+      updateEncButtonState();
+    }
+
+    function setEncryptionMode(mode) {
+      state.encMode = mode === 'advanced' ? 'advanced' : 'standard';
+      const isAdv = state.encMode === 'advanced';
+      if (btnStd) btnStd.classList.toggle('active', !isAdv);
+      if (btnAdv) btnAdv.classList.toggle('active', isAdv);
+      if (radioStd) radioStd.innerHTML = !isAdv ? '<i class="fa-solid fa-circle-dot"></i>' : '<i class="fa-regular fa-circle"></i>';
+      if (radioAdv) radioAdv.innerHTML = isAdv ? '<i class="fa-solid fa-circle-dot"></i>' : '<i class="fa-regular fa-circle"></i>';
+      if (panelStd) panelStd.style.display = !isAdv ? 'block' : 'none';
+      if (panelAdv) panelAdv.style.display = isAdv ? 'flex' : 'none';
+
+      if (!isAdv && DOM.encKSelect) {
+        DOM.encKSelect.value = '2';
+      }
+      syncAdvancedStageUI();
+    }
+
+    function resetAdvancedToDefault() {
+      if (s1Chk) s1Chk.checked = true;
+      if (s1BlockSlider) s1BlockSlider.value = '1';
+      if (s2Chk) s2Chk.checked = true;
+      if (s3Chk) s3Chk.checked = true;
+      if (s2ModeSel) s2ModeSel.value = 'keyed';
+      if (s2FixedSel) s2FixedSel.value = '1';
+      if (s2ModeRadioKeyed) s2ModeRadioKeyed.checked = true;
+      if (s2ModeRadioFixed) s2ModeRadioFixed.checked = false;
+      for (let i = 0; i < 6; i++) {
+        if (s2PermChks[i]) s2PermChks[i].checked = true;
+        if (s2FixRadios[i]) s2FixRadios[i].checked = (i === 1);
+      }
+      if (s3KSlider) s3KSlider.value = '2';
+      if (s3ChR) s3ChR.checked = true;
+      if (s3ChG) s3ChG.checked = true;
+      if (s3ChB) s3ChB.checked = true;
+      if (DOM.encKSelect) DOM.encKSelect.value = '2';
+      syncAdvancedStageUI();
+    }
+
+    if (btnStd) btnStd.addEventListener('click', () => setEncryptionMode('standard'));
+    if (btnAdv) btnAdv.addEventListener('click', () => setEncryptionMode('advanced'));
+    if (btnResetAdv) btnResetAdv.addEventListener('click', resetAdvancedToDefault);
+    if (btnS1ResetBlock) {
+      btnS1ResetBlock.addEventListener('click', () => {
+        if (s1BlockSlider) s1BlockSlider.value = '1';
+        syncAdvancedStageUI();
+      });
+    }
+    if (btnS2ResetPerms) {
+      btnS2ResetPerms.addEventListener('click', () => {
+        for (let i = 0; i < 6; i++) {
+          if (s2PermChks[i]) s2PermChks[i].checked = true;
+        }
+        syncAdvancedStageUI();
+      });
+    }
+
+    if (s2ModeRadioKeyed) {
+      s2ModeRadioKeyed.addEventListener('change', () => {
+        if (s2ModeRadioKeyed.checked && s2ModeSel) s2ModeSel.value = 'keyed';
+        syncAdvancedStageUI();
+      });
+    }
+    if (s2ModeRadioFixed) {
+      s2ModeRadioFixed.addEventListener('change', () => {
+        if (s2ModeRadioFixed.checked && s2ModeSel) s2ModeSel.value = 'fixed';
+        syncAdvancedStageUI();
+      });
+    }
+
+    s2PermChks.forEach(chk => {
+      if (!chk) return;
+      chk.addEventListener('change', syncAdvancedStageUI);
+    });
+
+    s2FixRadios.forEach(rad => {
+      if (!rad) return;
+      rad.addEventListener('change', () => {
+        if (rad.checked && s2FixedSel) s2FixedSel.value = rad.value;
+        syncAdvancedStageUI();
+      });
+    });
+
+    if (s1ReshuffleBtn) {
+      s1ReshuffleBtn.addEventListener('click', () => {
+        const arr = [0, 1, 2, 3, 4, 5, 6, 7];
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+        }
+        s1DemoPerm = arr;
+        renderStage1Demo();
+      });
+    }
+
+    [s1Chk, s1BlockSlider, s2Chk, s3Chk, s2ModeSel, s2FixedSel, s3KSlider, s3ChR, s3ChG, s3ChB].forEach(ctrl => {
+      if (!ctrl) return;
+      ctrl.addEventListener('input', syncAdvancedStageUI);
+      ctrl.addEventListener('change', syncAdvancedStageUI);
+    });
+
+    syncAdvancedStageUI();
+  }
+
   initKeyImageSystem();
+  initEncryptionModeSystem();
   updateEncButtonState();
   updateDecButtonState();
 
@@ -704,6 +1631,13 @@ document.addEventListener('DOMContentLoaded', () => {
       || (header.isLegacyChunk || header.chunkType === 'msBx'
         ? 'msBx (Legacy)'
         : (header.chunkType === 'msBX' ? 'msBX' : (header.magic === 'MSBX' ? '.msbx Header (Legacy)' : 'msBX')));
+    const stageCfg = header.stageConfig || BitEngine.normalizeStageConfig(header, header.k || 2);
+    const encModeLabel = stageCfg.encryptionMode === 'advanced'
+      ? (stageCfg.isExperimental ? 'Advanced Mode (Custom / Experimental)' : 'Advanced Mode (3-Stage Custom)')
+      : 'Standard Mode (3-Stage Default)';
+    const stage3Detail = stageCfg.stage3Enabled
+      ? `k = ${stageCfg.k} bit${stageCfg.k > 1 ? 's' : ''} (Channels: ${stageCfg.channelLabels})`
+      : 'Disabled (0 bits XORed)';
     const losslessCheckHtml = extraStats.verifiedLosslessPng
       ? `<div class="msbx-meta-item full">
            <span class="msbx-meta-label">PNG Lossless Pixel Round-Trip Verification</span>
@@ -726,12 +1660,16 @@ document.addEventListener('DOMContentLoaded', () => {
           <span class="msbx-meta-val">${idText} (${verText})</span>
         </div>
         <div class="msbx-meta-item">
+          <span class="msbx-meta-label">Encryption Mode</span>
+          <span class="msbx-meta-val">${encModeLabel}</span>
+        </div>
+        <div class="msbx-meta-item">
           <span class="msbx-meta-label">Original Colour Mode</span>
           <span class="msbx-meta-val">${modeText} (mode=${header.imageMode ?? header.originalColorMode ?? 1})</span>
         </div>
         <div class="msbx-meta-item">
           <span class="msbx-meta-label">Stage 3 MSB Setting</span>
-          <span class="msbx-meta-val">k = ${header.k} bit${header.k > 1 ? 's' : ''}</span>
+          <span class="msbx-meta-val">${stage3Detail}</span>
         </div>
         <div class="msbx-meta-item">
           <span class="msbx-meta-label">Image Dimensions</span>
@@ -752,6 +1690,10 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="msbx-meta-item">
           <span class="msbx-meta-label">Mask Storage</span>
           <span class="msbx-meta-val">${maskProtectionText}</span>
+        </div>
+        <div class="msbx-meta-item full">
+          <span class="msbx-meta-label">Active Stage Pipeline (Auto-Reversed on Decryption)</span>
+          <span class="msbx-meta-val" style="color: var(--primary-blue); font-weight: 600;">${stageCfg.enabledStagesSummary}</span>
         </div>
         ${losslessCheckHtml}
         <div class="msbx-meta-item full">
@@ -1073,10 +2015,10 @@ document.addEventListener('DOMContentLoaded', () => {
         for (let c = 0; c < 3; c++) {
           const wt = weights[c];
           const gx = (-3 * lab[i00 + c] + 3 * lab[i02 + c]
-                     - 10 * lab[i10 + c] + 10 * lab[i12 + c]
-                     - 3 * lab[i20 + c] + 3 * lab[i22 + c]) * wt;
+            - 10 * lab[i10 + c] + 10 * lab[i12 + c]
+            - 3 * lab[i20 + c] + 3 * lab[i22 + c]) * wt;
           const gy = (-3 * lab[i00 + c] - 10 * lab[i01 + c] - 3 * lab[i02 + c]
-                     + 3 * lab[i20 + c] + 10 * lab[i21 + c] + 3 * lab[i22 + c]) * wt;
+            + 3 * lab[i20 + c] + 10 * lab[i21 + c] + 3 * lab[i22 + c]) * wt;
           const g2 = gx * gx + gy * gy;
           sumG2 += g2;
           if (g2 > maxChG2) {
@@ -1656,16 +2598,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // 2. Overlapping aspect-preserving tiled passes for smaller faces in group photos
     const tiles = fastVideoMode
       ? [
-          [0, 0, w * 0.60, h * 0.85],
-          [w * 0.40, 0, w * 0.60, h * 0.85]
-        ]
+        [0, 0, w * 0.60, h * 0.85],
+        [w * 0.40, 0, w * 0.60, h * 0.85]
+      ]
       : [
-          [0, 0, w * 0.58, h * 0.75],
-          [w * 0.21, 0, w * 0.58, h * 0.75],
-          [w * 0.42, 0, w * 0.58, h * 0.75],
-          [0, h * 0.18, w * 0.56, h * 0.82],
-          [w * 0.44, h * 0.18, w * 0.56, h * 0.82]
-        ];
+        [0, 0, w * 0.58, h * 0.75],
+        [w * 0.21, 0, w * 0.58, h * 0.75],
+        [w * 0.42, 0, w * 0.58, h * 0.75],
+        [0, h * 0.18, w * 0.56, h * 0.82],
+        [w * 0.44, h * 0.18, w * 0.56, h * 0.82]
+      ];
     tiles.forEach(([tx, ty, tw, th]) => {
       runLandmarkerOnCrop(Math.round(tx), Math.round(ty), Math.round(tw), Math.round(th), fastVideoMode ? 384 : 512);
     });
@@ -1675,10 +2617,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const detCrops = fastVideoMode
         ? [[0, 0, w, h]]
         : [
-            [0, 0, w, h],
-            [0, 0, Math.round(w * 0.58), h],
-            [Math.round(w * 0.42), 0, Math.round(w * 0.58), h]
-          ];
+          [0, 0, w, h],
+          [0, 0, Math.round(w * 0.58), h],
+          [Math.round(w * 0.42), 0, Math.round(w * 0.58), h]
+        ];
       detCrops.forEach(([dx, dy, dw, dh]) => {
         try {
           const c = document.createElement('canvas');
@@ -1806,10 +2748,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const crops = w >= 480
       ? [
-          [0, 0, w, h],
-          [0, 0, Math.round(w * 0.62), h],
-          [Math.round(w * 0.38), 0, Math.round(w * 0.62), h]
-        ]
+        [0, 0, w, h],
+        [0, 0, Math.round(w * 0.62), h],
+        [Math.round(w * 0.38), 0, Math.round(w * 0.62), h]
+      ]
       : [[0, 0, w, h]];
 
     for (const [cx, cy, cw, ch] of crops) {
@@ -2809,6 +3751,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ctx.setLineDash([12, 8]);
       ctx.strokeRect(0, 0, W, H);
       ctx.restore();
+      if (typeof window.__refreshStage1LivePreview === 'function') window.__refreshStage1LivePreview();
       return;
     }
 
@@ -2816,7 +3759,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (scope === 'custom') {
       if (state.customRoi.active && state.customRoi.width > 0 && state.customRoi.height > 0) {
         const { x, y, width: w, height: h } = state.customRoi;
-        
+
         ctx.save();
         // Translucent golden fill
         ctx.fillStyle = 'rgba(245, 158, 11, 0.22)';
@@ -2858,6 +3801,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.fillText(text, bx + 10, by + fontSize + 4);
         ctx.restore();
       }
+      if (typeof window.__refreshStage1LivePreview === 'function') window.__refreshStage1LivePreview();
       return;
     }
 
@@ -3015,6 +3959,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ctx.strokeRect(x, y, mw, mh);
       ctx.restore();
     }
+    if (typeof window.__refreshStage1LivePreview === 'function') window.__refreshStage1LivePreview();
   }
 
   /**
@@ -3537,9 +4482,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Encrypt Process Execution (3-Stage Pipeline)
+  // Encrypt Process Execution (Standard or Advanced 3-Stage Pipeline)
   DOM.btnProcessEncrypt.addEventListener('click', async (e) => {
     if (!state.encImage) return;
+
+    // 0. Validate Standard / Advanced Stage Configuration
+    const stageValidation = getUiStageConfigValidation();
+    if (!stageValidation.valid) {
+      e.preventDefault();
+      alert(stageValidation.error);
+      return;
+    }
+    const activeStageCfg = stageValidation.config;
 
     // 1. If Text Password mode: Validate password entered
     if (state.encKeyType === 'text') {
@@ -3592,7 +4546,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const imgData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
         const activeMask = getActiveScopeMask();
-        const kVal = DOM.encKSelect ? (parseInt(DOM.encKSelect.value, 10) || 2) : 2;
+        const kVal = activeStageCfg.k;
         const protectMask = !!(DOM.encProtectMask && DOM.encProtectMask.checked);
 
         // Cache original copy for ground-truth fidelity verification in Decrypt tab
@@ -3614,13 +4568,15 @@ document.addEventListener('DOMContentLoaded', () => {
           imgData.height
         );
 
-        // Execute 3-Stage Reversible Encryption & Encode Self-Describing Encrypted PNG (with msBx metadata chunk)
+        // Execute Reversible Encryption (Standard or Advanced Mode) & Encode Self-Describing Encrypted PNG (with msBX metadata chunk)
         const result = await BitEngine.encryptToPNG(imgData, effectiveKey, activeMask, {
           k: kVal,
           iterations: BitEngine.DEFAULT_KDF_ITERATIONS,
           keyType: state.encKeyType === 'image' ? 'image' : 'text',
           scope: state.encScope,
-          protectMask
+          protectMask,
+          encryptionMode: state.encMode,
+          stageConfig: activeStageCfg
         });
 
         // Cache encrypted PNG binary & preview ImageData
@@ -3740,9 +4696,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const formatBadge = isLegacyMsbx
       ? '<b>[Legacy .msbx Container]</b> '
       : '<b>[Self-Describing Encrypted PNG]</b> ';
+    const stageCfg = meta.stageConfig || null;
+    const stageOrderHtml = stageCfg
+      ? `<br><b>Auto-detected Mode &amp; Reverse Order:</b> ${stageCfg.encryptionMode === 'advanced' ? 'Advanced Custom Mode' : 'Standard 3-Stage Mode'} — <code>${stageCfg.reverseStagesSummary}</code>.`
+      : '';
     DOM.decScopeInfo.className = 'dec-scope-info';
     DOM.decScopeInfo.style.display = 'flex';
-    DOM.decScopeInfoText.innerHTML = `${formatBadge}<b>Auto-detected scope:</b> ${label}. Enter your password or upload your key image below to decrypt.`;
+    DOM.decScopeInfoText.innerHTML = `${formatBadge}<b>Auto-detected scope:</b> ${label}.${stageOrderHtml} Enter your password or upload your key image below to decrypt.`;
   }
 
   function renderImageDataToCanvas(imgData, canvas, placeholder) {
@@ -3792,6 +4752,7 @@ document.addEventListener('DOMContentLoaded', () => {
         w: inspected.metadata.width,
         h: inspected.metadata.height,
         mask: inspected.mask,
+        stageConfig: inspected.metadata.stageConfig || null,
         roi: null
       };
 
@@ -3976,8 +4937,8 @@ document.addEventListener('DOMContentLoaded', () => {
           renderImageDataToCanvas(result.imageData, DOM.canvasDecResult, DOM.phDecResult);
 
           if (state.lastOriginalImageData &&
-              state.lastOriginalImageData.width === result.imageData.width &&
-              state.lastOriginalImageData.height === result.imageData.height) {
+            state.lastOriginalImageData.width === result.imageData.width &&
+            state.lastOriginalImageData.height === result.imageData.height) {
             const fidelity = BitEngine.calculateMetrics(state.lastOriginalImageData, result.imageData);
             DOM.valDecMse.textContent = fidelity.mse.toFixed(4);
             DOM.valDecPsnr.textContent = fidelity.psnr === Infinity ? '∞ dB' : (fidelity.psnr + ' dB');
@@ -4025,8 +4986,8 @@ document.addEventListener('DOMContentLoaded', () => {
           renderImageDataToCanvas(result.imageData, DOM.canvasDecResult, DOM.phDecResult);
 
           if (state.lastOriginalImageData &&
-              state.lastOriginalImageData.width === result.imageData.width &&
-              state.lastOriginalImageData.height === result.imageData.height) {
+            state.lastOriginalImageData.width === result.imageData.width &&
+            state.lastOriginalImageData.height === result.imageData.height) {
             const fidelity = BitEngine.calculateMetrics(state.lastOriginalImageData, result.imageData);
             DOM.valDecMse.textContent = fidelity.mse.toFixed(4);
             DOM.valDecPsnr.textContent = fidelity.psnr === Infinity ? '∞ dB' : (fidelity.psnr + ' dB');
@@ -6575,6 +7536,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ? { width: structure.ihdrInfo.width, height: structure.ihdrInfo.height, headerOnly: true }
           : { width: 0, height: 0, headerOnly: true };
         const decMeta = BitEngine.decodeMsBxMetadata(metaBytes, null, headerDims);
+        const sc = decMeta.stageConfig || BitEngine.normalizeStageConfig(null, decMeta.k);
         if (syncStructuredControls) {
           if (el('pex-edit-schema-ver')) el('pex-edit-schema-ver').value = String(decMeta.metaVersion);
           if (el('pex-edit-k')) el('pex-edit-k').value = String(decMeta.k);
@@ -6582,13 +7544,22 @@ document.addEventListener('DOMContentLoaded', () => {
           if (el('pex-edit-keytype')) el('pex-edit-keytype').value = decMeta.keyType;
           if (el('pex-edit-colormode')) el('pex-edit-colormode').value = String(decMeta.originalColorMode);
           if (el('pex-edit-maskcodec') && decMeta.maskCodec) el('pex-edit-maskcodec').value = String(decMeta.maskCodec);
+          if (el('pex-edit-s1')) el('pex-edit-s1').checked = !!sc.stage1Enabled;
+          if (el('pex-edit-s1-block')) el('pex-edit-s1-block').value = String(sc.stage1BlockSize || 1);
+          if (el('pex-edit-s2')) el('pex-edit-s2').checked = !!sc.stage2Enabled;
+          if (el('pex-edit-s3')) el('pex-edit-s3').checked = !!sc.stage3Enabled;
+          if (el('pex-edit-s2-mode')) el('pex-edit-s2-mode').value = sc.stage2Mode || 'keyed';
+          if (el('pex-edit-s2-fixed')) el('pex-edit-s2-fixed').value = String(sc.stage2FixedPermId ?? 1);
+          if (el('pex-edit-ch-r')) el('pex-edit-ch-r').checked = !!sc.stage3Channels.r;
+          if (el('pex-edit-ch-g')) el('pex-edit-ch-g').checked = !!sc.stage3Channels.g;
+          if (el('pex-edit-ch-b')) el('pex-edit-ch-b').checked = !!sc.stage3Channels.b;
         }
         if (liveValEl) {
           liveValEl.innerHTML = `
             <div class="pex-tier-item pass">
               <div>
                 <strong>✔ PNG Chunk Rebuilt &amp; Schema Valid (v${decMeta.metaVersion} • ${metaBytes.length.toLocaleString()} B payload)</strong>
-                <div style="font-size:11.5px; color:var(--text-muted);">CRC-32: <code>${structure.msbxSection.crcHex}</code> • k = ${decMeta.k} • Scope = ${decMeta.scope} • Mask Codec = ${decMeta.maskCodecLabel || 'None'} • KeyType = ${decMeta.keyType}</div>
+                <div style="font-size:11.5px; color:var(--text-muted);">CRC-32: <code>${structure.msbxSection.crcHex}</code> • Pipeline: ${sc.enabledStagesSummary} • Scope = ${decMeta.scope} • Mask Codec = ${decMeta.maskCodecLabel || 'None'}</div>
               </div>
               <span class="pex-tier-badge pass">SCHEMA OK</span>
             </div>
@@ -7091,7 +8062,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (structure.msbxSection) {
             try {
               curMeta = BitEngine.decodeMsBxMetadata(structure.msbxSection.dataBytes, null, { width: w, height: h });
-            } catch (_) {}
+            } catch (_) { }
           }
 
           const targetVer = parseInt(el('pex-edit-schema-ver')?.value || '2', 10);
@@ -7102,6 +8073,39 @@ document.addEventListener('DOMContentLoaded', () => {
           const newMaskCodec = parseInt(el('pex-edit-maskcodec')?.value || '3', 10);
           const optTag = (el('pex-edit-opt-tag')?.value || '').trim();
           const optDesc = (el('pex-edit-opt-desc')?.value || '').trim();
+
+          const s1On = el('pex-edit-s1') ? el('pex-edit-s1').checked : true;
+          const s1BlockSize = el('pex-edit-s1-block')
+            ? Math.max(1, Math.min(32, parseInt(el('pex-edit-s1-block').value, 10) || 1))
+            : 1;
+          const s2On = el('pex-edit-s2') ? el('pex-edit-s2').checked : true;
+          const s3On = el('pex-edit-s3') ? el('pex-edit-s3').checked : true;
+          const s2Mode = el('pex-edit-s2-mode') ? el('pex-edit-s2-mode').value : 'keyed';
+          const s2FixedId = el('pex-edit-s2-fixed') ? (parseInt(el('pex-edit-s2-fixed').value, 10) || 0) : 1;
+          const chR = el('pex-edit-ch-r') ? el('pex-edit-ch-r').checked : true;
+          const chG = el('pex-edit-ch-g') ? el('pex-edit-ch-g').checked : true;
+          const chB = el('pex-edit-ch-b') ? el('pex-edit-ch-b').checked : true;
+
+          if (!s1On && !s2On && !s3On) {
+            alert('Invalid Stage Configuration: At least one encryption stage (S1, S2, or S3) must be enabled.');
+            return;
+          }
+          if (s3On && !chR && !chG && !chB) {
+            alert('Invalid Stage 3 Configuration: Please select at least one RGB channel (Red, Green, or Blue) when Stage 3 is enabled.');
+            return;
+          }
+
+          const newStageCfg = BitEngine.normalizeStageConfig({
+            encryptionMode: (!s1On || s1BlockSize > 1 || !s2On || !s3On || s2Mode === 'fixed' || !chR || !chG || !chB || state.encMode === 'advanced') ? 'advanced' : 'standard',
+            stage1Enabled: s1On,
+            stage1BlockSize: s1BlockSize,
+            stage2Enabled: s2On,
+            stage2Mode: s2Mode === 'fixed' ? 'fixed' : 'keyed',
+            stage2FixedPermId: s2FixedId,
+            stage3Enabled: s3On,
+            k: newK,
+            stage3Channels: { r: chR, g: chG, b: chB }
+          }, newK);
 
           const optFields = [];
           if (optTag.length > 0) optFields.push({ id: 2, critical: false, value: optTag });
@@ -7130,8 +8134,12 @@ document.addEventListener('DOMContentLoaded', () => {
               }
             }
 
-            // FAST PATH: If pixel-encryption settings (k, scope, keyType, colorMode) are unchanged and working copy is authentic,
-            // rebuild ONLY the msBX metadata chunk (for new Mask Codec, Schema v1/v2, or Optional TLV) in < 5 ms without re-encoding IDAT!
+            const curSc = (curMeta && curMeta.stageConfig)
+              ? curMeta.stageConfig
+              : BitEngine.normalizeStageConfig(null, curMeta ? curMeta.k : 2);
+
+            // FAST PATH: If pixel-encryption settings (k, scope, keyType, colorMode, and stage configuration) are unchanged
+            // and working copy is authentic, rebuild ONLY the msBX metadata chunk in < 5 ms without re-encoding IDAT!
             const pixelSettingsUnchanged = !!(
               curMeta &&
               pexState.isAuthenticWorkingCopy &&
@@ -7139,7 +8147,14 @@ document.addEventListener('DOMContentLoaded', () => {
               curMeta.scope === newScope &&
               curMeta.keyType === newKeyType &&
               curMeta.originalColorMode === newColorMode &&
-              !!curMeta.maskProtected === protectMask
+              !!curMeta.maskProtected === protectMask &&
+              curSc.stage1Enabled === newStageCfg.stage1Enabled &&
+              curSc.stage1BlockSize === newStageCfg.stage1BlockSize &&
+              curSc.stage2Enabled === newStageCfg.stage2Enabled &&
+              curSc.stage2Mode === newStageCfg.stage2Mode &&
+              curSc.stage2FixedPermId === newStageCfg.stage2FixedPermId &&
+              curSc.stage3Enabled === newStageCfg.stage3Enabled &&
+              curSc.channelMask === newStageCfg.channelMask
             );
 
             if (pixelSettingsUnchanged) {
@@ -7195,7 +8210,9 @@ document.addEventListener('DOMContentLoaded', () => {
                   salt,
                   verificationTag: new Uint8Array(32).fill(1),
                   encodedMaskBytes,
-                  optionalFields: optFields.length > 0 ? optFields : null
+                  optionalFields: optFields.length > 0 ? optFields : null,
+                  stageConfig: newStageCfg,
+                  encryptionMode: newStageCfg.encryptionMode
                 });
                 const decPrelim = BitEngine.decodeMsBxMetadataV2(prelimV2, masterKey, { width: w, height: h, headerOnly: true });
                 const verifyTagV2 = BitEngine.computePngVerificationTagV2(
@@ -7219,7 +8236,9 @@ document.addEventListener('DOMContentLoaded', () => {
                   salt,
                   verificationTag: verifyTagV2,
                   encodedMaskBytes,
-                  optionalFields: optFields.length > 0 ? optFields : null
+                  optionalFields: optFields.length > 0 ? optFields : null,
+                  stageConfig: newStageCfg,
+                  encryptionMode: newStageCfg.encryptionMode
                 });
               } else {
                 const prelimV1 = BitEngine.encodeMsBxMetadata({
@@ -7233,7 +8252,9 @@ document.addEventListener('DOMContentLoaded', () => {
                   iterations,
                   salt,
                   verificationTag: new Uint8Array(32),
-                  encodedMaskBytes
+                  encodedMaskBytes,
+                  stageConfig: newStageCfg,
+                  encryptionMode: newStageCfg.encryptionMode
                 });
                 const verifyTagV1 = BitEngine.computePngVerificationTag(
                   masterKey,
@@ -7253,7 +8274,9 @@ document.addEventListener('DOMContentLoaded', () => {
                   iterations,
                   salt,
                   verificationTag: verifyTagV1,
-                  encodedMaskBytes
+                  encodedMaskBytes,
+                  stageConfig: newStageCfg,
+                  encryptionMode: newStageCfg.encryptionMode
                 });
               }
 
@@ -7273,8 +8296,8 @@ document.addEventListener('DOMContentLoaded', () => {
               updatedHeader.byteLength = rebuiltPng.byteLength;
 
               if (state.lastOriginalImageData &&
-                  state.lastOriginalImageData.width === w &&
-                  state.lastOriginalImageData.height === h) {
+                state.lastOriginalImageData.width === w &&
+                state.lastOriginalImageData.height === h) {
                 state.lastEncryptedPngBytes = new Uint8Array(rebuiltPng);
                 state.lastEncryptedHeader = updatedHeader;
                 renderMsbxHeaderCard(
@@ -7290,7 +8313,7 @@ document.addEventListener('DOMContentLoaded', () => {
               return;
             }
 
-            // FULL RE-ENCRYPTION PATH (when k, scope, keyType, or originalColorMode changed)
+            // FULL RE-ENCRYPTION PATH (when k, scope, keyType, originalColorMode, or stageConfig changed)
             const cleanOrigCopy = new ImageData(
               new Uint8ClampedArray(pexState.referencePlainImageData.data),
               pexState.referencePlainImageData.width,
@@ -7305,7 +8328,9 @@ document.addEventListener('DOMContentLoaded', () => {
               metaVersion: targetVer,
               maskCodec: newMaskCodec,
               optionalFields: optFields.length > 0 ? optFields : null,
-              protectMask
+              protectMask,
+              stageConfig: newStageCfg,
+              encryptionMode: newStageCfg.encryptionMode
             });
 
             pushUndoSnapshot();
@@ -7315,8 +8340,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // If this was the main Encryption Tab image, also sync Step 2 Preview & Header Card!
             if (state.lastOriginalImageData &&
-                state.lastOriginalImageData.width === cleanOrigCopy.width &&
-                state.lastOriginalImageData.height === cleanOrigCopy.height) {
+              state.lastOriginalImageData.width === cleanOrigCopy.width &&
+              state.lastOriginalImageData.height === cleanOrigCopy.height) {
               state.lastEncryptedPngBytes = new Uint8Array(regen.pngBytes);
               state.lastEncryptedHeader = regen.header;
               if (DOM.encKSelect) DOM.encKSelect.value = String(newK);
@@ -7371,7 +8396,9 @@ document.addEventListener('DOMContentLoaded', () => {
               salt,
               verificationTag,
               encodedMaskBytes: encodedMask,
-              optionalFields: optFields.length > 0 ? optFields : null
+              optionalFields: optFields.length > 0 ? optFields : null,
+              stageConfig: newStageCfg,
+              encryptionMode: newStageCfg.encryptionMode
             });
           } else {
             const rleMask = (newScope !== 'full' && mask) ? BitEngine.encodeMaskTrailer(mask) : null;
@@ -7387,7 +8414,9 @@ document.addEventListener('DOMContentLoaded', () => {
               iterations,
               salt,
               verificationTag,
-              encodedMaskBytes: rleMask
+              encodedMaskBytes: rleMask,
+              stageConfig: newStageCfg,
+              encryptionMode: newStageCfg.encryptionMode
             });
           }
 
@@ -7547,7 +8576,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Generate initial sample in background so Explorer is ready immediately
     setTimeout(() => {
       if (!pexState.workingPngBytes) {
-        generateDemoEncryptedPng(2).catch(() => {});
+        generateDemoEncryptedPng(2).catch(() => { });
       }
     }, 150);
   }
@@ -7974,16 +9003,17 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (decodedMeta) {
+        const sc = decodedMeta.stageConfig || BitEngine.normalizeStageConfig(null, decodedMeta.k);
         sumBox.innerHTML = `
           <div class="pex-opt-kpi-grid" style="margin-top: 8px;">
             <div class="pex-kpi-card">
-              <span class="kpi-label">Algorithm Identifier</span>
-              <span class="kpi-val" style="font-size:14px;">${decodedMeta.identifier} (Algo v${decodedMeta.algoVersion})</span>
-              <span class="kpi-sub">3-Stage MSB Pipeline</span>
+              <span class="kpi-label">Encryption Mode &amp; Stages</span>
+              <span class="kpi-val" style="font-size:13.5px;">${sc.encryptionMode === 'advanced' ? 'Advanced Custom Mode' : 'Standard 3-Stage Mode'}</span>
+              <span class="kpi-sub">${sc.enabledStagesSummary}</span>
             </div>
             <div class="pex-kpi-card">
-              <span class="kpi-label">Stage 3 MSB Bit Depth</span>
-              <span class="kpi-val" style="font-size:15px;">k = ${decodedMeta.k} bit${decodedMeta.k > 1 ? 's' : ''}</span>
+              <span class="kpi-label">Stage 3 MSB &amp; Channels</span>
+              <span class="kpi-val" style="font-size:15px;">${sc.stage3Enabled ? `k = ${decodedMeta.k} (${sc.channelLabels})` : 'Stage 3 Disabled'}</span>
               <span class="kpi-sub">Colour Mode: ${decodedMeta.modeLabel}</span>
             </div>
             <div class="pex-kpi-card">
@@ -8363,13 +9393,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.syncReadOnlyExplorerIfEmpty = (pngBytes, fileName) => {
       if (!roState.pngBytes) {
-        loadReadOnlyPng(pngBytes, fileName).catch(() => {});
+        loadReadOnlyPng(pngBytes, fileName).catch(() => { });
       }
     };
 
     setTimeout(() => {
       if (!roState.pngBytes) {
-        generateRoSamplePng('msBX_v2').catch(() => {});
+        generateRoSamplePng('msBX_v2').catch(() => { });
       }
     }, 200);
   }

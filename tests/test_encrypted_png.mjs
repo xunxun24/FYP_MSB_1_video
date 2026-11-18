@@ -603,10 +603,25 @@ async function runTests() {
     assert.equal(repBadLen.level1.valid, false, 'Chunk length exceeding file size must fail Level 1 structural check');
 
     // Test invalid MSB k setting in v1 (k = 0 and k = 9)
-    const badKMeta = BitEngine.encodeMsBxMetadata({
+    assert.throws(
+      () => BitEngine.encodeMsBxMetadata({
+        metaVersion: 1,
+        originalColorMode: 1,
+        k: 9,
+        keyType: 'text',
+        scope: 'full',
+        width: W,
+        height: H,
+        iterations: 1000,
+        salt: new Uint8Array(16).fill(1),
+        verificationTag: new Uint8Array(32).fill(2)
+      }),
+      /Invalid MSB bit depth/i
+    );
+    const validV1ForK = BitEngine.encodeMsBxMetadata({
       metaVersion: 1,
       originalColorMode: 1,
-      k: 9,
+      k: 2,
       keyType: 'text',
       scope: 'full',
       width: W,
@@ -615,6 +630,8 @@ async function runTests() {
       salt: new Uint8Array(16).fill(1),
       verificationTag: new Uint8Array(32).fill(2)
     });
+    const badKMeta = new Uint8Array(validV1ForK);
+    badKMeta[11] = 9;
     assert.throws(
       () => BitEngine.decodeMsBxMetadata(badKMeta),
       /Invalid MSB bit depth/i
@@ -676,6 +693,500 @@ async function runTests() {
     assert.equal(countDiffPixels(origRgb, decryptedFinal.imageData), 0, 'Decrypted image must be pixel-for-pixel identical (0 diff pixels)');
 
     pass('Complete 13-step integrated Encryption -> Binary Explorer -> Structured Edit/Regeneration -> Optimization -> Validation -> Decryption workflow verified (0 diff pixels)');
+  }
+
+  // 16. Standard Mode & All 7 Advanced Stage Combinations (Stage 1 only, Stage 2 only, Stage 3 only, S1+S2, S1+S3, S2+S3, S1+S2+S3)
+  {
+    const stageCombos = [
+      { name: 'Standard Mode (S1+S2+S3)', mode: 'standard', s1: true,  s2: true,  s3: true },
+      { name: 'Advanced Mode (S1+S2+S3)', mode: 'advanced', s1: true,  s2: true,  s3: true },
+      { name: 'Stage 1 Only (Fisher-Yates)', mode: 'advanced', s1: true,  s2: false, s3: false },
+      { name: 'Stage 2 Only (RGB Perm)',     mode: 'advanced', s1: false, s2: true,  s3: false },
+      { name: 'Stage 3 Only (k-MSB XOR)',    mode: 'advanced', s1: false, s2: false, s3: true },
+      { name: 'Stage 1 + Stage 2',           mode: 'advanced', s1: true,  s2: true,  s3: false },
+      { name: 'Stage 1 + Stage 3',           mode: 'advanced', s1: true,  s2: false, s3: true },
+      { name: 'Stage 2 + Stage 3',           mode: 'advanced', s1: false, s2: true,  s3: true }
+    ];
+
+    for (const combo of stageCombos) {
+      const enc = await BitEngine.encryptToPNG(cloneImageData(origRgb), testKeyA, null, {
+        k: 3,
+        iterations: 1000,
+        encryptionMode: combo.mode,
+        stageConfig: {
+          encryptionMode: combo.mode,
+          stage1Enabled: combo.s1,
+          stage2Enabled: combo.s2,
+          stage2Mode: 'keyed',
+          stage3Enabled: combo.s3,
+          k: 3,
+          stage3Channels: { r: true, g: true, b: true }
+        }
+      });
+
+      assert.ok(countDiffPixels(origRgb, enc.imageData) > 0, `${combo.name} must modify pixels during encryption`);
+      const inspected = await BitEngine.inspectEncryptedPNG(enc.pngBytes);
+      assert.equal(inspected.metadata.stage1Enabled, combo.s1, `${combo.name}: msBX stage1Enabled mismatch`);
+      assert.equal(inspected.metadata.stage2Enabled, combo.s2, `${combo.name}: msBX stage2Enabled mismatch`);
+      assert.equal(inspected.metadata.stage3Enabled, combo.s3, `${combo.name}: msBX stage3Enabled mismatch`);
+
+      const dec = await BitEngine.decryptFromPNG(enc.pngBytes, testKeyA);
+      assert.equal(countDiffPixels(origRgb, dec.imageData), 0, `${combo.name}: must recover 0 different pixels`);
+    }
+
+    // Verify validation rejects 0 enabled stages and 0 enabled channels
+    assert.throws(
+      () => BitEngine.normalizeStageConfig({ stage1Enabled: false, stage2Enabled: false, stage3Enabled: false }),
+      /At least one encryption stage/i
+    );
+    assert.throws(
+      () => BitEngine.normalizeStageConfig({ stage1Enabled: false, stage2Enabled: false, stage3Enabled: true, stage3Channels: { r: false, g: false, b: false } }),
+      /At least one RGB channel/i
+    );
+
+    pass('Standard Mode & all 7 Advanced stage combinations (S1, S2, S3, S1+S2, S1+S3, S2+S3, S1+S2+S3) verified with 0 different pixels');
+  }
+
+  // 17. Advanced Stage 2 Fixed Permutations (RGB/RBG/GRB/GBR/BRG/BGR), Stage 3 RGB Channel Subsets, k=1..8, Key Image, Selective Face/Body & Custom ROI
+  {
+    // A. Test all 6 Fixed RGB Permutations (0=RGB, 1=RBG, 2=GRB, 3=GBR, 4=BRG, 5=BGR) + Key-Driven
+    for (let fixedId = 0; fixedId <= 5; fixedId++) {
+      const encFixed = await BitEngine.encryptToPNG(cloneImageData(origRgb), testKeyA, null, {
+        k: 2,
+        iterations: 1000,
+        encryptionMode: 'advanced',
+        stageConfig: {
+          encryptionMode: 'advanced',
+          stage1Enabled: false,
+          stage2Enabled: true,
+          stage2Mode: 'fixed',
+          stage2FixedPermId: fixedId,
+          stage3Enabled: false,
+          k: 2
+        }
+      });
+      const insp = await BitEngine.inspectEncryptedPNG(encFixed.pngBytes);
+      assert.equal(insp.metadata.stage2Mode, 'fixed');
+      assert.equal(insp.metadata.stage2FixedPermId, fixedId);
+      assert.equal(insp.metadata.stage2FixedPermLabel, BitEngine.CHANNEL_PERM_LABELS[fixedId]);
+
+      const decFixed = await BitEngine.decryptFromPNG(encFixed.pngBytes, testKeyA);
+      assert.equal(countDiffPixels(origRgb, decFixed.imageData), 0, `Fixed RGB permutation ${BitEngine.CHANNEL_PERM_LABELS[fixedId]} must recover 0 diff pixels`);
+    }
+
+    // B. Test all 7 non-empty RGB channel combinations in Stage 3 (and verify unselected channels remain 100% untouched when S1=false, S2=false!)
+    const chCombos = [
+      { r: true,  g: false, b: false },
+      { r: false, g: true,  b: false },
+      { r: false, g: false, b: true  },
+      { r: true,  g: true,  b: false },
+      { r: true,  g: false, b: true  },
+      { r: false, g: true,  b: true  },
+      { r: true,  g: true,  b: true  }
+    ];
+
+    for (const ch of chCombos) {
+      const encCh = await BitEngine.encryptToPNG(cloneImageData(origRgb), testKeyA, null, {
+        k: 5,
+        iterations: 1000,
+        encryptionMode: 'advanced',
+        stageConfig: {
+          encryptionMode: 'advanced',
+          stage1Enabled: false,
+          stage2Enabled: false,
+          stage3Enabled: true,
+          k: 5,
+          stage3Channels: ch
+        }
+      });
+
+      // Verify unselected channels were NOT modified in the encrypted image
+      for (let i = 0; i < origRgb.data.length; i += 4) {
+        if (!ch.r) assert.equal(encCh.imageData.data[i], origRgb.data[i], 'Disabled Red channel must remain unchanged');
+        if (!ch.g) assert.equal(encCh.imageData.data[i + 1], origRgb.data[i + 1], 'Disabled Green channel must remain unchanged');
+        if (!ch.b) assert.equal(encCh.imageData.data[i + 2], origRgb.data[i + 2], 'Disabled Blue channel must remain unchanged');
+      }
+
+      const decCh = await BitEngine.decryptFromPNG(encCh.pngBytes, testKeyA);
+      assert.equal(countDiffPixels(origRgb, decCh.imageData), 0, `Channel subset R=${ch.r},G=${ch.g},B=${ch.b} must recover 0 diff pixels`);
+    }
+
+    // C. Test Key-Image + Face/Body Selective Mask + Custom ROI + Schema v1 & Schema v2 with Advanced Stage Config
+    const keyImgBuffer = await BitEngine.encodeLosslessPNG(origGray);
+    const keyImgDigest = await BitEngine.hashKeyImage(keyImgBuffer);
+    const customRoi = [{ x: 10, y: 8, width: 28, height: 22 }];
+
+    for (const ver of [1, 2]) {
+      const encAdvRoi = await BitEngine.encryptToPNG(cloneImageData(origRgb), keyImgDigest.hex, customRoi, {
+        k: 6,
+        iterations: 1000,
+        keyType: 'image',
+        scope: 'custom',
+        metaVersion: ver,
+        encryptionMode: 'advanced',
+        stageConfig: {
+          encryptionMode: 'advanced',
+          stage1Enabled: true,
+          stage2Enabled: true,
+          stage2Mode: 'fixed',
+          stage2FixedPermId: 4, // BRG
+          stage3Enabled: true,
+          k: 6,
+          stage3Channels: { r: true, g: false, b: true }
+        }
+      });
+
+      // Verify PNG Binary Visualizer field breakdown includes the Stage Configuration fields
+      const structAdv = BitEngine.parsePngBinaryStructure(encAdvRoi.pngBytes);
+      assert.equal(structAdv.structuralValid, true);
+      const stageField = structAdv.msbxSection.msbxBreakdown.fields.find(f => f.field.includes('Stage'));
+      assert.ok(stageField, `Schema v${ver} field breakdown must include Stage Configuration fields`);
+
+      const decAdvRoi = await BitEngine.decryptFromPNG(encAdvRoi.pngBytes, keyImgDigest.hex);
+      assert.equal(countDiffPixels(origRgb, decAdvRoi.imageData), 0, `Schema v${ver} Advanced ROI + Key Image must recover 0 diff pixels`);
+    }
+
+    pass('All 6 Fixed RGB permutations, all 7 RGB channel subsets, k=1..8, Key-Image, Selective Face/Body & Custom ROI in Schema v1 & v2 verified with 0 different pixels');
+  }
+
+  // 18. Stage 1 Customizable Pixel Block Size (1×1 to 32×32 px), Mask-Aware Block Permutation, Irregular & Disconnected ROIs, Tiny ROI Fallback, Non-Divisible Dimensions
+  {
+    // Create a non-divisible 83 × 71 test image so every block size (2, 3, 5, 8, 16, 32) has incomplete edge regions
+    const oddW = 83;
+    const oddH = 71;
+    const oddImg = createSyntheticImage(oddW, oddH, 'rgb');
+
+    // A. Verify Stage 1 block size validation (1..32 valid; 0 or 33 rejected)
+    assert.throws(
+      () => BitEngine.normalizeStageConfig({ stage1Enabled: true, stage1BlockSize: 0 }, 2),
+      /Invalid Stage 1 pixel block size/i
+    );
+    assert.throws(
+      () => BitEngine.normalizeStageConfig({ stage1Enabled: true, stage1BlockSize: 33 }, 2),
+      /Invalid Stage 1 pixel block size/i
+    );
+
+    // B. Test all required block sizes (1×1, 2×2, 3×3, 5×5, 8×8, 16×16, 32×32) across Entire Image on non-divisible 83×71 image
+    const blockSizes = [1, 2, 3, 5, 8, 16, 32];
+    const stage1OnlyOutputs = new Map();
+
+    for (const B of blockSizes) {
+      const saltFixed = new Uint8Array(16).fill(0x42);
+      const encBlk = await BitEngine.encryptToPNG(cloneImageData(oddImg), testKeyA, null, {
+        k: 2,
+        iterations: 1000,
+        salt: saltFixed,
+        encryptionMode: B === 1 ? 'standard' : 'advanced',
+        stageConfig: {
+          encryptionMode: B === 1 ? 'standard' : 'advanced',
+          stage1Enabled: true,
+          stage1BlockSize: B,
+          stage2Enabled: true,
+          stage2Mode: 'keyed',
+          stage3Enabled: true,
+          k: 2,
+          stage3Channels: { r: true, g: true, b: true }
+        }
+      });
+
+      const insp = await BitEngine.inspectEncryptedPNG(encBlk.pngBytes);
+      assert.equal(insp.metadata.stage1BlockSize, B, `Decoded metadata stage1BlockSize must equal ${B}`);
+      assert.equal(insp.metadata.stageConfig.stage1BlockSize, B);
+
+      const decBlk = await BitEngine.decryptFromPNG(encBlk.pngBytes, testKeyA);
+      assert.equal(countDiffPixels(oddImg, decBlk.imageData), 0, `Full-image block size ${B}×${B} on 83×71 image must recover 0 diff pixels`);
+
+      // Also run Stage-1-only encryption with fixed salt to verify different block sizes produce distinct spatial permutations
+      const encS1Only = await BitEngine.encryptToPNG(cloneImageData(oddImg), testKeyA, null, {
+        k: 2,
+        iterations: 1000,
+        salt: saltFixed,
+        encryptionMode: 'advanced',
+        stageConfig: {
+          encryptionMode: 'advanced',
+          stage1Enabled: true,
+          stage1BlockSize: B,
+          stage2Enabled: false,
+          stage3Enabled: false,
+          k: 2
+        }
+      });
+      stage1OnlyOutputs.set(B, encS1Only.imageData);
+      const decS1Only = await BitEngine.decryptFromPNG(encS1Only.pngBytes, testKeyA);
+      assert.equal(countDiffPixels(oddImg, decS1Only.imageData), 0, `Stage-1-only block size ${B}×${B} must recover 0 diff pixels`);
+    }
+
+    // Verify 1×1, 5×5, and 16×16 Stage-1-only encrypted outputs are genuinely different from each other
+    assert.ok(countDiffPixels(stage1OnlyOutputs.get(1), stage1OnlyOutputs.get(5)) > 100, '1×1 vs 5×5 Stage 1 output must differ');
+    assert.ok(countDiffPixels(stage1OnlyOutputs.get(5), stage1OnlyOutputs.get(16)) > 100, '5×5 vs 16×16 Stage 1 output must differ');
+
+    // C. Test Irregular Face Mask, Disconnected Multi-Person Body Mask, and Custom ROI across block sizes (1, 3, 5, 8, 16, 32)
+    //    and verify 0 background pixels outside the mask are modified!
+    const irregularFaceMask = new Uint8Array(oddW * oddH);
+    const disconnectedBodyMask = new Uint8Array(oddW * oddH);
+    for (let y = 0; y < oddH; y++) {
+      for (let x = 0; x < oddW; x++) {
+        const idx = y * oddW + x;
+        // Irregular ellipse + wavy contour for Face mask
+        const dx = (x - 41) / 22;
+        const dy = (y - 35) / 24;
+        if (dx * dx + dy * dy <= 1.0 + 0.12 * Math.sin(x * 0.7) * Math.cos(y * 0.6)) {
+          irregularFaceMask[idx] = 1;
+        }
+        // Two disconnected person regions for Body mask (left person + right person)
+        if ((x >= 5 && x <= 31 && y >= 8 && y <= 62) || (x >= 48 && x <= 77 && y >= 10 && y <= 65)) {
+          disconnectedBodyMask[idx] = 1;
+        }
+      }
+    }
+    const customRoiRect = [{ x: 11, y: 9, width: 47, height: 39 }];
+    const customRoiMask = new Uint8Array(oddW * oddH);
+    const customTargetIdx = BitEngine.getTargetPixelIndices(oddImg, customRoiRect);
+    for (let i = 0; i < customTargetIdx.length; i++) {
+      customRoiMask[customTargetIdx[i]] = 1;
+    }
+
+    const regionConfigs = [
+      { scope: 'face', maskInput: irregularFaceMask, binMask: irregularFaceMask },
+      { scope: 'person', maskInput: disconnectedBodyMask, binMask: disconnectedBodyMask },
+      { scope: 'custom', maskInput: customRoiRect, binMask: customRoiMask }
+    ];
+
+    for (const reg of regionConfigs) {
+      for (const B of [1, 3, 5, 8, 16, 32]) {
+        const encSelective = await BitEngine.encryptToPNG(cloneImageData(oddImg), testKeyA, reg.maskInput, {
+          k: 3,
+          iterations: 1000,
+          scope: reg.scope,
+          encryptionMode: 'advanced',
+          stageConfig: {
+            encryptionMode: 'advanced',
+            stage1Enabled: true,
+            stage1BlockSize: B,
+            stage2Enabled: true,
+            stage2Mode: 'keyed',
+            stage3Enabled: true,
+            k: 3,
+            stage3Channels: { r: true, g: true, b: true }
+          }
+        });
+
+        // Verify ZERO pixels outside the ROI mask were modified or shifted into background!
+        let outsideModified = 0;
+        for (let p = 0; p < oddW * oddH; p++) {
+          if (reg.binMask[p] === 0) {
+            const i = p * 4;
+            if (encSelective.imageData.data[i] !== oddImg.data[i] ||
+                encSelective.imageData.data[i + 1] !== oddImg.data[i + 1] ||
+                encSelective.imageData.data[i + 2] !== oddImg.data[i + 2]) {
+              outsideModified++;
+            }
+          }
+        }
+        assert.equal(outsideModified, 0, `Scope=${reg.scope} with block size ${B}×${B} must modify 0 pixels outside ROI mask`);
+
+        // Verify decryption recovers 0 differing pixels
+        const decSelective = await BitEngine.decryptFromPNG(encSelective.pngBytes, testKeyA);
+        assert.equal(countDiffPixels(oddImg, decSelective.imageData), 0, `Scope=${reg.scope} with block size ${B}×${B} must recover 0 diff pixels`);
+      }
+    }
+
+    // D. Test Tiny ROI smaller than chosen block size (e.g. 10×10 ROI with 32×32 block size => fallbackUsed = true)
+    //    and Key Image + Schema v1 & Schema v2 round-trip
+    const tinyRoi = [{ x: 15, y: 15, width: 10, height: 10 }];
+    const tinyIndices = BitEngine.getTargetPixelIndices(oddImg, tinyRoi);
+    const tinyPart = BitEngine.partitionMaskAwareBlocks(oddW, oddH, tinyIndices, 32);
+    assert.equal(tinyPart.fallbackUsed, true, '10×10 ROI with 32×32 block size must trigger deterministic fallback');
+    assert.equal(tinyPart.eligibleBlocks.length, 0);
+    assert.equal(tinyPart.boundaryIndices.length, tinyIndices.length);
+
+    const keyImgBuf18 = await BitEngine.encodeLosslessPNG(origGray);
+    const keyImgDig18 = await BitEngine.hashKeyImage(keyImgBuf18);
+
+    for (const ver of [1, 2]) {
+      const encTiny = await BitEngine.encryptToPNG(cloneImageData(oddImg), keyImgDig18.hex, tinyRoi, {
+        k: 4,
+        iterations: 1000,
+        keyType: 'image',
+        scope: 'custom',
+        metaVersion: ver,
+        encryptionMode: 'advanced',
+        stageConfig: {
+          encryptionMode: 'advanced',
+          stage1Enabled: true,
+          stage1BlockSize: 32,
+          stage2Enabled: true,
+          stage2Mode: 'keyed',
+          stage3Enabled: true,
+          k: 4,
+          stage3Channels: { r: true, g: true, b: true }
+        }
+      });
+      const inspTiny = await BitEngine.inspectEncryptedPNG(encTiny.pngBytes);
+      assert.equal(inspTiny.metadata.stage1BlockSize, 32, `Schema v${ver} must preserve stage1BlockSize=32`);
+
+      const decTiny = await BitEngine.decryptFromPNG(encTiny.pngBytes, keyImgDig18.hex);
+      assert.equal(countDiffPixels(oddImg, decTiny.imageData), 0, `Schema v${ver} tiny ROI fallback with 32×32 block size must recover 0 diff pixels`);
+    }
+
+    pass('Stage 1 customizable pixel block sizes (1×1..32×32 px), mask-aware block permutation, irregular/disconnected ROIs, tiny ROI fallback, non-divisible dimensions, and Schema v1/v2 round-trip verified with 0 different pixels');
+  }
+
+  // =========================================================================
+  // 19. STAGE 2 CUSTOMIZABLE RGB CHANNEL PERMUTATION (DYNAMIC SUBSETS & FIXED)
+  // =========================================================================
+  {
+    const imgW = 48;
+    const imgH = 40;
+    const srcImg = createSyntheticImage(imgW, imgH, 'rgb');
+    const s2Key = 'Stage2-RGB-Custom-Key!';
+    const keyImgBuf19 = await BitEngine.encodeLosslessPNG(origGray);
+    const keyImgDig19 = await BitEngine.hashKeyImage(keyImgBuf19);
+
+    // A. Validation check: 0 allowed permutations in Key-Driven mode must throw
+    assert.throws(() => {
+      BitEngine.normalizeStageConfig({
+        encryptionMode: 'advanced',
+        stage2Enabled: true,
+        stage2Mode: 'keyed',
+        stage2AllowedMask: 0
+      }, 2);
+    }, /At least one RGB channel permutation/i, 'Empty Stage 2 allowed permutation mask must be rejected');
+
+    // B. Key-Driven Dynamic Subsets (All 6, 3-subset, 2-subset, 1-subset) across Schema v1 & v2
+    const dynamicCases = [
+      { label: 'All 6 (Default)', perms: ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'], expectedMask: 0x3F },
+      { label: '3-Subset {RGB,BGR,GRB}', perms: ['RGB', 'BGR', 'GRB'], expectedMask: (1 << 0) | (1 << 5) | (1 << 2) },
+      { label: '2-Subset {RBG,GBR}', perms: ['RBG', 'GBR'], expectedMask: (1 << 1) | (1 << 3) },
+      { label: '1-Subset {BGR}', perms: ['BGR'], expectedMask: (1 << 5) }
+    ];
+
+    for (const ver of [1, 2]) {
+      for (const dc of dynamicCases) {
+        const encDyn = await BitEngine.encryptToPNG(cloneImageData(srcImg), s2Key, null, {
+          k: 3,
+          iterations: 1000,
+          metaVersion: ver,
+          encryptionMode: 'advanced',
+          stageConfig: {
+            encryptionMode: 'advanced',
+            stage1Enabled: true,
+            stage1BlockSize: 4,
+            stage2Enabled: true,
+            stage2Mode: 'keyed',
+            stage2AllowedPerms: dc.perms,
+            stage3Enabled: true,
+            k: 3,
+            stage3Channels: { r: true, g: false, b: true }
+          }
+        });
+
+        const insp = await BitEngine.inspectEncryptedPNG(encDyn.pngBytes);
+        assert.equal(insp.metadata.stageConfig.stage2Mode, 'keyed');
+        assert.equal(insp.metadata.stageConfig.stage2AllowedMask, dc.expectedMask, `Schema v${ver} ${dc.label} must persist stage2AllowedMask`);
+        assert.equal(insp.metadata.stageConfig.stage2AllowedCount, dc.perms.length);
+
+        const decDyn = await BitEngine.decryptFromPNG(encDyn.pngBytes, s2Key);
+        assert.equal(countDiffPixels(srcImg, decDyn.imageData), 0, `Schema v${ver} Stage 2 Dynamic ${dc.label} must recover 0 diff pixels`);
+      }
+    }
+
+    // C. Verify that single-permutation Key-Driven Dynamic {BGR} actually produces BGR channel order when Stage 1 & 3 are OFF
+    const encOnlyBgr = await BitEngine.encryptToPNG(cloneImageData(srcImg), s2Key, null, {
+      k: 2,
+      iterations: 1000,
+      metaVersion: 2,
+      encryptionMode: 'advanced',
+      stageConfig: {
+        encryptionMode: 'advanced',
+        stage1Enabled: false,
+        stage2Enabled: true,
+        stage2Mode: 'keyed',
+        stage2AllowedPerms: ['BGR'],
+        stage3Enabled: false,
+        k: 2
+      }
+    });
+    const encOnlyBgrImg = (await BitEngine.decodeLosslessPNG(encOnlyBgr.pngBytes)).imageData;
+    for (let i = 0; i < imgW * imgH * 4; i += 4) {
+      assert.equal(encOnlyBgrImg.data[i], srcImg.data[i + 2], 'Single allowed perm {BGR} must map R <- B');
+      assert.equal(encOnlyBgrImg.data[i + 1], srcImg.data[i + 1], 'Single allowed perm {BGR} must map G <- G');
+      assert.equal(encOnlyBgrImg.data[i + 2], srcImg.data[i], 'Single allowed perm {BGR} must map B <- R');
+    }
+    const decOnlyBgr = await BitEngine.decryptFromPNG(encOnlyBgr.pngBytes, s2Key);
+    assert.equal(countDiffPixels(srcImg, decOnlyBgr.imageData), 0);
+
+    // D. All 6 Fixed RGB Order options + Selective ROI (Face/Body/Custom) + Key Image + Mask Privacy Protection
+    const roiMask = new Uint8Array(imgW * imgH);
+    for (let y = 8; y < 32; y++) {
+      for (let x = 10; x < 38; x++) {
+        if (((x - 24) / 14) ** 2 + ((y - 20) / 12) ** 2 <= 1.0) {
+          roiMask[y * imgW + x] = 1;
+        }
+      }
+    }
+
+    for (let permId = 0; permId < 6; permId++) {
+      const encFix = await BitEngine.encryptToPNG(cloneImageData(srcImg), keyImgDig19.hex, roiMask, {
+        k: 2,
+        iterations: 1000,
+        keyType: 'image',
+        scope: 'face',
+        protectMask: true,
+        metaVersion: 2,
+        encryptionMode: 'advanced',
+        stageConfig: {
+          encryptionMode: 'advanced',
+          stage1Enabled: true,
+          stage1BlockSize: 8,
+          stage2Enabled: true,
+          stage2Mode: 'fixed',
+          stage2FixedPermId: permId,
+          stage3Enabled: true,
+          k: 2,
+          stage3Channels: { r: true, g: true, b: true }
+        }
+      });
+
+      const encFixImg = (await BitEngine.decodeLosslessPNG(encFix.pngBytes)).imageData;
+      let outsideDiffs = 0;
+      for (let p = 0; p < imgW * imgH; p++) {
+        if (!roiMask[p]) {
+          const idx = p * 4;
+          if (encFixImg.data[idx] !== srcImg.data[idx] ||
+              encFixImg.data[idx + 1] !== srcImg.data[idx + 1] ||
+              encFixImg.data[idx + 2] !== srcImg.data[idx + 2]) {
+            outsideDiffs++;
+          }
+        }
+      }
+      assert.equal(outsideDiffs, 0, `Fixed permId=${permId} must not modify pixels outside Face ROI`);
+
+      const decFix = await BitEngine.decryptFromPNG(encFix.pngBytes, keyImgDig19.hex);
+      assert.equal(countDiffPixels(srcImg, decFix.imageData), 0, `Fixed permId=${permId} with Key Image + Protected Mask must recover 0 diff pixels`);
+    }
+
+    // E. Stage 2 Disabled with Stage 1 (8x8) & Stage 3 (k=5)
+    const encS2Off = await BitEngine.encryptToPNG(cloneImageData(srcImg), s2Key, roiMask, {
+      k: 5,
+      iterations: 1000,
+      scope: 'body',
+      metaVersion: 2,
+      encryptionMode: 'advanced',
+      stageConfig: {
+        encryptionMode: 'advanced',
+        stage1Enabled: true,
+        stage1BlockSize: 8,
+        stage2Enabled: false,
+        stage3Enabled: true,
+        k: 5,
+        stage3Channels: { r: true, g: true, b: true }
+      }
+    });
+    const decS2Off = await BitEngine.decryptFromPNG(encS2Off.pngBytes, s2Key);
+    assert.equal(countDiffPixels(srcImg, decS2Off.imageData), 0, 'Stage 2 Disabled must recover 0 diff pixels');
+
+    pass('Stage 2 RGB channel permutation customization (Key-Driven dynamic subsets, all 6 Fixed orders, Stage 2 OFF, ROI isolation, Key Image, Mask Protection, and Schema v1/v2) verified with 0 different pixels');
   }
 
   console.log(`\nALL ${passed} TEST SUITES PASSED SUCCESSFULLY.`);

@@ -696,6 +696,245 @@ const BitEngine = {
     [2, 1, 0]  // 5: inv of [2, 1, 0] -> [2, 1, 0]
   ],
 
+  CHANNEL_PERM_LABELS: ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'],
+  CHANNEL_PERM_MAP: { RGB: 0, RBG: 1, GRB: 2, GBR: 3, BRG: 4, BGR: 5 },
+
+  /**
+   * Normalize and validate a 3-stage encryption configuration object (Standard or Advanced Mode).
+   */
+  normalizeStageConfig(rawConfig = null, fallbackK = 2) {
+    const src = (rawConfig && typeof rawConfig === 'object') ? rawConfig : {};
+    const kVal = (typeof src.k === 'number') ? (src.k | 0) : (fallbackK | 0);
+    if (kVal < 1 || kVal > 8) {
+      throw new Error(`Invalid MSB bit depth (k = ${kVal}): Must be between 1 and 8.`);
+    }
+
+    const stage1Enabled = src.stage1Enabled !== undefined ? !!src.stage1Enabled : true;
+    const stage2Enabled = src.stage2Enabled !== undefined ? !!src.stage2Enabled : true;
+    const stage3Enabled = src.stage3Enabled !== undefined ? !!src.stage3Enabled : true;
+
+    if (!stage1Enabled && !stage2Enabled && !stage3Enabled) {
+      throw new Error("Invalid encryption stage configuration: At least one encryption stage (Stage 1, Stage 2, or Stage 3) must be enabled.");
+    }
+
+    const stage1BlockSize = (typeof src.stage1BlockSize === 'number') ? (src.stage1BlockSize | 0) : 1;
+    if (stage1BlockSize < 1 || stage1BlockSize > 32) {
+      throw new Error(`Invalid Stage 1 pixel block size (${stage1BlockSize}): Must be an integer between 1 and 32.`);
+    }
+
+    const rawAlgoId = (typeof src.stage1AlgoId === 'number') ? (src.stage1AlgoId | 0) : 0;
+    if (rawAlgoId !== 0 && rawAlgoId !== 1) {
+      throw new Error(`Unsupported Stage 1 permutation algorithm ID (${rawAlgoId}): Only 0 (Keyed Fisher–Yates 1×1) and 1 (Keyed Fisher–Yates B×B Block) are supported.`);
+    }
+    const stage1AlgoId = stage1BlockSize > 1 ? 1 : 0;
+
+    const stage2Mode = (src.stage2Mode === 'fixed' || src.stage2Mode === 1) ? 'fixed' : 'keyed';
+    let stage2FixedPermId = 0;
+    if (typeof src.stage2FixedPermId === 'number') {
+      stage2FixedPermId = src.stage2FixedPermId | 0;
+    } else if (typeof src.stage2FixedPerm === 'string' && this.CHANNEL_PERM_MAP[src.stage2FixedPerm.toUpperCase()] !== undefined) {
+      stage2FixedPermId = this.CHANNEL_PERM_MAP[src.stage2FixedPerm.toUpperCase()];
+    }
+    if (stage2FixedPermId < 0 || stage2FixedPermId > 5) {
+      throw new Error(`Invalid Stage 2 fixed RGB permutation ID (${stage2FixedPermId}): Must be between 0 (RGB) and 5 (BGR).`);
+    }
+
+    let stage2AllowedMask = 0x3F;
+    if (typeof src.stage2AllowedMask === 'number') {
+      stage2AllowedMask = src.stage2AllowedMask & 0x3F;
+    } else if (Array.isArray(src.stage2AllowedPerms) || Array.isArray(src.stage2AllowedIds)) {
+      const arr = src.stage2AllowedPerms || src.stage2AllowedIds;
+      let m = 0;
+      for (const item of arr) {
+        if (typeof item === 'number' && item >= 0 && item <= 5) {
+          m |= (1 << item);
+        } else if (typeof item === 'string' && this.CHANNEL_PERM_MAP[item.trim().toUpperCase()] !== undefined) {
+          m |= (1 << this.CHANNEL_PERM_MAP[item.trim().toUpperCase()]);
+        }
+      }
+      stage2AllowedMask = m & 0x3F;
+    } else if (src.stage2Allowed && typeof src.stage2Allowed === 'object') {
+      let m = 0;
+      for (let i = 0; i < 6; i++) {
+        const lbl = this.CHANNEL_PERM_LABELS[i];
+        if (src.stage2Allowed[lbl] || src.stage2Allowed[lbl.toLowerCase()] || src.stage2Allowed[i]) {
+          m |= (1 << i);
+        }
+      }
+      if (m !== 0) stage2AllowedMask = m;
+    }
+
+    if (stage2Enabled && stage2Mode === 'keyed' && stage2AllowedMask === 0) {
+      throw new Error("Invalid Stage 2 configuration: At least one RGB channel permutation must be selected when Stage 2 is in Key-Driven mode.");
+    }
+    if (stage2AllowedMask === 0) {
+      stage2AllowedMask = 0x3F;
+    }
+
+    const stage2AllowedIds = [];
+    const stage2AllowedLabels = [];
+    for (let i = 0; i < 6; i++) {
+      if ((stage2AllowedMask & (1 << i)) !== 0) {
+        stage2AllowedIds.push(i);
+        stage2AllowedLabels.push(this.CHANNEL_PERM_LABELS[i]);
+      }
+    }
+    const stage2AllowedCount = stage2AllowedIds.length;
+
+    let channelMask = 0x07;
+    if (typeof src.channelMask === 'number') {
+      channelMask = src.channelMask & 0x07;
+    } else if (src.stage3Channels && typeof src.stage3Channels === 'object') {
+      channelMask = ((src.stage3Channels.r !== false ? 0x04 : 0)
+                   | (src.stage3Channels.g !== false ? 0x02 : 0)
+                   | (src.stage3Channels.b !== false ? 0x01 : 0));
+    }
+
+    if (stage3Enabled && channelMask === 0) {
+      throw new Error("Invalid Stage 3 configuration: At least one RGB channel (Red, Green, or Blue) must be selected when Stage 3 is enabled.");
+    }
+    if (!stage3Enabled && channelMask === 0) {
+      channelMask = 0x07;
+    }
+
+    const stage3Channels = {
+      r: (channelMask & 0x04) !== 0,
+      g: (channelMask & 0x02) !== 0,
+      b: (channelMask & 0x01) !== 0
+    };
+
+    const isStandardDefault = (
+      stage1Enabled &&
+      stage1BlockSize === 1 &&
+      stage2Enabled &&
+      stage2Mode === 'keyed' &&
+      stage2AllowedMask === 0x3F &&
+      stage3Enabled &&
+      channelMask === 0x07
+    );
+
+    const encryptionMode = (src.encryptionMode === 'advanced' || !isStandardDefault)
+      ? 'advanced'
+      : 'standard';
+
+    const chList = [];
+    if (stage3Channels.r) chList.push('R');
+    if (stage3Channels.g) chList.push('G');
+    if (stage3Channels.b) chList.push('B');
+    const channelLabels = chList.join(', ') || 'None';
+    const fixedPermLabel = this.CHANNEL_PERM_LABELS[stage2FixedPermId] || 'RGB';
+
+    const fwdParts = [];
+    const revParts = [];
+    if (stage1Enabled) {
+      const s1Desc = stage1BlockSize > 1 ? `Fisher–Yates ${stage1BlockSize}×${stage1BlockSize} Block` : 'Fisher–Yates 1×1';
+      fwdParts.push(`Stage 1 (${s1Desc})`);
+      revParts.unshift(`Reverse Stage 1 (${s1Desc})`);
+    }
+    if (stage2Enabled) {
+      const s2Desc = stage2Mode === 'fixed'
+        ? `Fixed ${fixedPermLabel}`
+        : (stage2AllowedCount === 6 ? 'Keyed RGB' : `Keyed RGB [${stage2AllowedLabels.join(',')}]`);
+      fwdParts.push(`Stage 2 (${s2Desc})`);
+      revParts.unshift(`Reverse Stage 2 (${s2Desc})`);
+    }
+    if (stage3Enabled) {
+      fwdParts.push(`Stage 3 (k=${kVal} XOR on ${chList.join('+')})`);
+      revParts.unshift(`Reverse Stage 3 (k=${kVal} XOR on ${chList.join('+')})`);
+    }
+
+    return {
+      encryptionMode,
+      isStandardDefault,
+      isExperimental: !isStandardDefault,
+      stage1Enabled,
+      stage1AlgoId,
+      stage1BlockSize,
+      stage1BlockPixels: stage1BlockSize * stage1BlockSize,
+      stage1AlgoLabel: stage1BlockSize > 1
+        ? `Keyed Fisher–Yates Block Bijection (${stage1BlockSize}×${stage1BlockSize} px)`
+        : 'Keyed Fisher–Yates Bijection (1×1 px)',
+      stage2Enabled,
+      stage2Mode,
+      stage2FixedPermId,
+      stage2FixedPermLabel: fixedPermLabel,
+      stage2AllowedMask,
+      stage2AllowedIds,
+      stage2AllowedLabels,
+      stage2AllowedCount,
+      stage3Enabled,
+      k: kVal,
+      stage3Channels,
+      channelMask,
+      channelLabels,
+      enabledCount: (stage1Enabled ? 1 : 0) + (stage2Enabled ? 1 : 0) + (stage3Enabled ? 1 : 0),
+      enabledStagesSummary: fwdParts.join(' → '),
+      reverseStagesSummary: revParts.join(' → ')
+    };
+  },
+
+  /**
+   * Pack a normalized Stage Configuration into 2 or 3 compact bytes `[stageByte0, stageByte1 (, stageByte2)]`:
+   * - stageByte0: [7] isAdvanced (1b) | [6] stage1 (1b) | [5] stage2 (1b) | [4] stage3 (1b) | [3] stage2Fixed (1b) | [2:0] fixedPermId or 0x07 for custom dynamic subset
+   * - stageByte1: [7:3] stage1BlockSize - 1 (5b, 0..31 => 1×1..32×32 px) | [2] Red (1b) | [1] Green (1b) | [0] Blue (1b)
+   * - stageByte2 (optional, when stage2Mode='keyed' and stage2AllowedMask != 0x3F): [5:0] 6-bit allowed permutation mask
+   */
+  encodeStageConfigBytes(rawConfig, fallbackK = 2) {
+    const cfg = this.normalizeStageConfig(rawConfig, fallbackK);
+    const isAdvBit = (cfg.encryptionMode === 'advanced' || !cfg.isStandardDefault) ? 1 : 0;
+    const isCustomDynamic = (cfg.stage2Mode !== 'fixed' && cfg.stage2AllowedMask !== 0x3F);
+    const low3 = cfg.stage2Mode === 'fixed'
+      ? (cfg.stage2FixedPermId & 0x07)
+      : (isCustomDynamic ? 0x07 : 0x00);
+
+    const b0 = ((isAdvBit & 0x01) << 7)
+             | ((cfg.stage1Enabled ? 1 : 0) << 6)
+             | ((cfg.stage2Enabled ? 1 : 0) << 5)
+             | ((cfg.stage3Enabled ? 1 : 0) << 4)
+             | ((cfg.stage2Mode === 'fixed' ? 1 : 0) << 3)
+             | (low3 & 0x07);
+    const b1 = (((cfg.stage1BlockSize - 1) & 0x1F) << 3)
+             | (cfg.channelMask & 0x07);
+
+    if (isCustomDynamic) {
+      return new Uint8Array([b0 & 0xFF, b1 & 0xFF, cfg.stage2AllowedMask & 0x3F]);
+    }
+    return new Uint8Array([b0 & 0xFF, b1 & 0xFF]);
+  },
+
+  /**
+   * Decode bit-packed `[stageByte0, stageByte1 (, stageByte2)]` from `msBX` metadata into a validated Stage Configuration.
+   */
+  decodeStageConfigBytes(byte0, byte1, k = 2, byte2 = 0x3F) {
+    const isAdv = ((byte0 >>> 7) & 0x01) === 1;
+    const stage1Enabled = ((byte0 >>> 6) & 0x01) === 1;
+    const stage2Enabled = ((byte0 >>> 5) & 0x01) === 1;
+    const stage3Enabled = ((byte0 >>> 4) & 0x01) === 1;
+    const stage2Fixed = ((byte0 >>> 3) & 0x01) === 1;
+    const low3 = byte0 & 0x07;
+    const stage2FixedPermId = stage2Fixed ? low3 : 0;
+    let stage2AllowedMask = 0x3F;
+    if (!stage2Fixed && low3 === 0x07 && byte2 !== undefined) {
+      stage2AllowedMask = (byte2 & 0x3F) || 0x3F;
+    }
+
+    const stage1BlockSize = ((byte1 >>> 3) & 0x1F) + 1;
+    const channelMask = byte1 & 0x07;
+
+    return this.normalizeStageConfig({
+      encryptionMode: isAdv ? 'advanced' : 'standard',
+      stage1Enabled,
+      stage1BlockSize,
+      stage2Enabled,
+      stage2Mode: stage2Fixed ? 'fixed' : 'keyed',
+      stage2FixedPermId,
+      stage2AllowedMask,
+      stage3Enabled,
+      k,
+      channelMask
+    }, k);
+  },
+
   /**
    * Generalized k-MSB XOR Operation (default k = 2)
    * Takes the top k MSB bits and XORs them with keyBits (0 .. (2^k - 1)),
@@ -876,6 +1115,10 @@ const BitEngine = {
       next2Bits() {
         return (this.nextUint32() & 0x03);
       },
+      nextKBits(k) {
+        const kk = Math.max(1, Math.min(8, k | 0));
+        return (this.nextUint32() & ((1 << kk) - 1));
+      },
       nextKBits(k = 2) {
         const mask = (1 << Math.max(1, Math.min(8, k))) - 1;
         return (this.nextUint32() & mask);
@@ -949,6 +1192,10 @@ const BitEngine = {
       },
       next2Bits() {
         return (this.nextUint32() & 0x03);
+      },
+      nextKBits(k) {
+        const kk = Math.max(1, Math.min(8, k | 0));
+        return (this.nextUint32() & ((1 << kk) - 1));
       },
       nextKBits(k = 2) {
         const mask = (1 << Math.max(1, Math.min(8, k))) - 1;
@@ -1058,56 +1305,424 @@ const BitEngine = {
   },
 
   /**
-   * Core 3-Stage Encryption with explicit PRNG streams and configurable k (1..8, default 2).
+   * Deterministically partition a selected ROI pixel set (`targetIndices`) into:
+   * 1. `eligibleBlocks`: Top-left pixel indices of complete `B × B` blocks entirely inside the selected ROI
+   * 2. `boundaryIndices`: All remaining selected ROI pixels (irregular boundary pixels, non-divisible image-edge pixels,
+   *    or all selected pixels if fewer than 2 complete `B × B` blocks fit inside the ROI)
+   *
+   * Guarantees:
+   * - Uses a deterministic grid anchored at origin (0, 0) in row-major order.
+   * - Never includes or touches any pixel outside `targetIndices`.
+   * - If `candidateBlocks.length < 2`, safely falls back (`fallbackUsed = true`) to individual pixel permutation over `targetIndices`.
    */
-  _encryptWithStreams(imageData, prngPixel, prngChannel, prngXor, maskOrRegions = null, kVal = 2) {
+  partitionMaskAwareBlocks(width, height, targetIndices, blockSize = 1) {
+    const W = width | 0;
+    const H = height | 0;
+    const B = Math.max(1, Math.min(32, blockSize | 0));
+    const M = targetIndices ? targetIndices.length : 0;
+
+    if (B <= 1 || M === 0 || W <= 0 || H <= 0) {
+      return {
+        blockSize: 1,
+        eligibleBlocks: new Int32Array(0),
+        boundaryIndices: targetIndices || new Int32Array(0),
+        fallbackUsed: false,
+        completeBlockCount: 0,
+        completeBlockPixels: 0,
+        boundaryPixels: M,
+        totalSelectedPixels: M
+      };
+    }
+
+    const totalPixels = W * H;
+    const inRoi = new Uint8Array(totalPixels);
+    for (let i = 0; i < M; i++) {
+      inRoi[targetIndices[i]] = 1;
+    }
+
+    const candidateBlocks = [];
+    for (let by = 0; by + B <= H; by += B) {
+      for (let bx = 0; bx + B <= W; bx += B) {
+        let allInside = true;
+        for (let dy = 0; dy < B && allInside; dy++) {
+          const rowBase = (by + dy) * W + bx;
+          for (let dx = 0; dx < B; dx++) {
+            if (inRoi[rowBase + dx] === 0) {
+              allInside = false;
+              break;
+            }
+          }
+        }
+        if (allInside) {
+          candidateBlocks.push(by * W + bx);
+        }
+      }
+    }
+
+    // If fewer than 2 complete B×B blocks fit in the selected ROI, deterministically fall back to individual pixel permutation
+    if (candidateBlocks.length < 2) {
+      return {
+        blockSize: B,
+        eligibleBlocks: new Int32Array(0),
+        boundaryIndices: targetIndices,
+        fallbackUsed: true,
+        completeBlockCount: candidateBlocks.length,
+        completeBlockPixels: 0,
+        boundaryPixels: M,
+        totalSelectedPixels: M
+      };
+    }
+
+    const eligibleBlocks = Int32Array.from(candidateBlocks);
+    const claimed = new Uint8Array(totalPixels);
+    for (let k = 0; k < eligibleBlocks.length; k++) {
+      const topLeft = eligibleBlocks[k];
+      const bx = topLeft % W;
+      const by = (topLeft - bx) / W;
+      for (let dy = 0; dy < B; dy++) {
+        const rowBase = (by + dy) * W + bx;
+        for (let dx = 0; dx < B; dx++) {
+          claimed[rowBase + dx] = 1;
+        }
+      }
+    }
+
+    const completeBlockPixels = eligibleBlocks.length * B * B;
+    const boundaryLen = Math.max(0, M - completeBlockPixels);
+    const boundaryIndices = new Int32Array(boundaryLen);
+    let bPos = 0;
+    for (let i = 0; i < M; i++) {
+      const p = targetIndices[i];
+      if (claimed[p] === 0) {
+        boundaryIndices[bPos++] = p;
+      }
+    }
+
+    return {
+      blockSize: B,
+      eligibleBlocks,
+      boundaryIndices,
+      fallbackUsed: false,
+      completeBlockCount: eligibleBlocks.length,
+      completeBlockPixels,
+      boundaryPixels: boundaryIndices.length,
+      totalSelectedPixels: M
+    };
+  },
+
+  /**
+   * Generate a fast, illustrative pre-key Stage 1 permutation preview on a cloned ImageData
+   * for the Advanced Mode Stage 1 interactive block-size demonstration.
+   * Uses a deterministic demo PRNG and only executes Stage 1 (preserving original RGB colours)
+   * so users can visually compare 1×1 fine pixel scrambling against B×B mosaic block shuffling.
+   */
+  previewStage1BlockPermutation(imageData, maskOrRegions = null, blockSize = 1) {
+    const W = imageData.width;
+    const H = imageData.height;
+    const B = Math.max(1, Math.min(32, blockSize | 0));
+    const src = imageData.data;
+    const out = new Uint8ClampedArray(src);
+    const targetIndices = this.getTargetPixelIndices(imageData, maskOrRegions);
+    const M = targetIndices.length;
+    const partition = this.partitionMaskAwareBlocks(W, H, targetIndices, B);
+
+    if (M > 1) {
+      const demoSeed = new Uint32Array([0x4B584254, 0x53544731, (B * 0x9E3779B9) >>> 0, (M * 0x85EBCA6B) >>> 0]);
+      const demoPrng = this.getFramePRNG(demoSeed, B, 1);
+
+      if (B <= 1 || partition.eligibleBlocks.length < 2) {
+        const perm = new Int32Array(M);
+        for (let i = 0; i < M; i++) perm[i] = i;
+        for (let i = M - 1; i > 0; i--) {
+          const j = demoPrng.nextInt(i + 1);
+          const tmp = perm[i];
+          perm[i] = perm[j];
+          perm[j] = tmp;
+        }
+        for (let idx = 0; idx < M; idx++) {
+          const sIdx = targetIndices[idx] * 4;
+          const dIdx = targetIndices[perm[idx]] * 4;
+          out[dIdx] = src[sIdx];
+          out[dIdx + 1] = src[sIdx + 1];
+          out[dIdx + 2] = src[sIdx + 2];
+          out[dIdx + 3] = src[sIdx + 3];
+        }
+      } else {
+        const K = partition.eligibleBlocks.length;
+        const blockPerm = new Int32Array(K);
+        for (let i = 0; i < K; i++) blockPerm[i] = i;
+        for (let i = K - 1; i > 0; i--) {
+          const j = demoPrng.nextInt(i + 1);
+          const tmp = blockPerm[i];
+          blockPerm[i] = blockPerm[j];
+          blockPerm[j] = tmp;
+        }
+        for (let bIdx = 0; bIdx < K; bIdx++) {
+          const srcTop = partition.eligibleBlocks[bIdx];
+          const dstTop = partition.eligibleBlocks[blockPerm[bIdx]];
+          for (let dy = 0; dy < B; dy++) {
+            const sRow = srcTop + dy * W;
+            const dRow = dstTop + dy * W;
+            for (let dx = 0; dx < B; dx++) {
+              const sIdx = (sRow + dx) * 4;
+              const dIdx = (dRow + dx) * 4;
+              out[dIdx] = src[sIdx];
+              out[dIdx + 1] = src[sIdx + 1];
+              out[dIdx + 2] = src[sIdx + 2];
+              out[dIdx + 3] = src[sIdx + 3];
+            }
+          }
+        }
+
+        const L = partition.boundaryIndices.length;
+        if (L >= 2) {
+          const boundPerm = new Int32Array(L);
+          for (let i = 0; i < L; i++) boundPerm[i] = i;
+          for (let i = L - 1; i > 0; i--) {
+            const j = demoPrng.nextInt(i + 1);
+            const tmp = boundPerm[i];
+            boundPerm[i] = boundPerm[j];
+            boundPerm[j] = tmp;
+          }
+          for (let i = 0; i < L; i++) {
+            const sIdx = partition.boundaryIndices[i] * 4;
+            const dIdx = partition.boundaryIndices[boundPerm[i]] * 4;
+            out[dIdx] = src[sIdx];
+            out[dIdx + 1] = src[sIdx + 1];
+            out[dIdx + 2] = src[sIdx + 2];
+            out[dIdx + 3] = src[sIdx + 3];
+          }
+        }
+      }
+    }
+
+    return {
+      previewImageData: new ImageData(out, W, H),
+      partition
+    };
+  },
+
+  /**
+   * Illustrative pre-key preview generator for Stage 2 (and preceding Stage 1).
+   * Demonstrates how RGB channel permutation rearranges color components across
+   * the active ROI and selected allowed permutation subset / fixed order.
+   */
+  previewStage2ChannelPermutation(imageData, maskOrRegions = null, stageConfig = null) {
+    const cfg = this.normalizeStageConfig(stageConfig);
+    const W = imageData.width;
+    const H = imageData.height;
+    const targetIndices = this.getTargetPixelIndices(imageData, maskOrRegions);
+    const M = targetIndices.length;
+
+    let intermediateData;
+    if (cfg.stage1Enabled) {
+      const s1Res = this.previewStage1BlockPermutation(imageData, maskOrRegions, cfg.stage1BlockSize);
+      intermediateData = s1Res.previewImageData.data;
+    } else {
+      intermediateData = new Uint8ClampedArray(imageData.data);
+    }
+
+    const out = new Uint8ClampedArray(intermediateData);
+    if (cfg.stage2Enabled && M > 0) {
+      const isFixed = cfg.stage2Mode === 'fixed';
+      const allowedIds = (cfg.stage2AllowedIds && cfg.stage2AllowedIds.length > 0)
+        ? cfg.stage2AllowedIds
+        : [0, 1, 2, 3, 4, 5];
+      const allowedCount = allowedIds.length;
+
+      const demoSeed = new Uint32Array([0x4B584254, 0x53544732, (allowedCount * 0x9E3779B9) >>> 0, (M * 0x85EBCA6B) >>> 0]);
+      const demoPrng = this.getFramePRNG(demoSeed, 2, 1);
+
+      for (let idx = 0; idx < M; idx++) {
+        const pixelIdx = targetIndices[idx] * 4;
+        const r = intermediateData[pixelIdx];
+        const g = intermediateData[pixelIdx + 1];
+        const b = intermediateData[pixelIdx + 2];
+        const rgb = [r, g, b];
+
+        const permIdx = isFixed ? cfg.stage2FixedPermId : allowedIds[demoPrng.nextInt(allowedCount)];
+        const pOrder = this.CHANNEL_PERMS[permIdx];
+
+        out[pixelIdx] = rgb[pOrder[0]];
+        out[pixelIdx + 1] = rgb[pOrder[1]];
+        out[pixelIdx + 2] = rgb[pOrder[2]];
+      }
+    }
+
+    return {
+      previewImageData: new ImageData(out, W, H),
+      config: cfg
+    };
+  },
+
+  /**
+   * Illustrative pre-key preview generator for Stage 3 (cumulative Stage 1 + Stage 2 + Stage 3 k-MSB XOR).
+   * Demonstrates the combined visual effect across the active ROI without using any real secret key.
+   */
+  previewStage3MsbXor(imageData, maskOrRegions = null, stageConfig = null) {
+    const cfg = this.normalizeStageConfig(stageConfig);
+    const W = imageData.width;
+    const H = imageData.height;
+    const kk = cfg.k;
+    const targetIndices = this.getTargetPixelIndices(imageData, maskOrRegions);
+    const M = targetIndices.length;
+
+    const s2Res = this.previewStage2ChannelPermutation(imageData, maskOrRegions, cfg);
+    const out = new Uint8ClampedArray(s2Res.previewImageData.data);
+
+    if (cfg.stage3Enabled && M > 0) {
+      const activeCh = [
+        !!cfg.stage3Channels.r,
+        !!cfg.stage3Channels.g,
+        !!cfg.stage3Channels.b
+      ];
+      const demoSeed = new Uint32Array([0x4B584254, 0x53544733, (kk * 0x9E3779B9) >>> 0, (M * 0x85EBCA6B) >>> 0]);
+      const demoPrng = this.getFramePRNG(demoSeed, kk, 2);
+
+      for (let idx = 0; idx < M; idx++) {
+        const pixelIdx = targetIndices[idx] * 4;
+        for (let c = 0; c < 3; c++) {
+          if (activeCh[c]) {
+            const cIdx = pixelIdx + c;
+            const keyBits = kk === 2 ? demoPrng.next2Bits() : demoPrng.nextKBits(kk);
+            out[cIdx] = kk === 2 ? this.xor2MSB(out[cIdx], keyBits) : this.xorKMSB(out[cIdx], keyBits, kk);
+          }
+        }
+      }
+    }
+
+    return {
+      previewImageData: new ImageData(out, W, H),
+      config: cfg
+    };
+  },
+
+  /**
+   * Core 3-Stage Encryption with explicit PRNG streams, configurable k (1..8, default 2),
+   * and customizable stage configuration (Standard Mode vs. Advanced Mode).
+   */
+  _encryptWithStreams(imageData, prngPixel, prngChannel, prngXor, maskOrRegions = null, kVal = 2, stageConfig = null) {
+    const cfg = this.normalizeStageConfig(stageConfig, kVal);
+    const kk = cfg.k;
+    const W = imageData.width;
+    const H = imageData.height;
     const data = imageData.data;
     const originalCopy = new Uint8ClampedArray(data);
     const targetIndices = this.getTargetPixelIndices(imageData, maskOrRegions);
     const M = targetIndices.length;
 
     if (M === 0) {
-      return { imageData, swappedCount: 0, mse: 0, psnr: '∞' };
+      return { imageData, swappedCount: 0, mse: 0, psnr: '∞', stageConfig: cfg };
     }
 
-    // === STAGE 1: PIXEL PERMUTATION (Fisher-Yates Shuffle) ===
-    const perm = new Int32Array(M);
-    for (let i = 0; i < M; i++) perm[i] = i;
-    for (let i = M - 1; i > 0; i--) {
-      const j = prngPixel.nextInt(i + 1);
-      const temp = perm[i];
-      perm[i] = perm[j];
-      perm[j] = temp;
-    }
-
+    // === STAGE 1: PIXEL PERMUTATION (Keyed Fisher–Yates 1×1 or Mask-Aware B×B Block Shuffle) ===
     const stage1Data = new Uint8ClampedArray(data);
-    for (let idx = 0; idx < M; idx++) {
-      const srcIdx = targetIndices[idx] * 4;
-      const dstIdx = targetIndices[perm[idx]] * 4;
-      stage1Data[dstIdx] = data[srcIdx];
-      stage1Data[dstIdx + 1] = data[srcIdx + 1];
-      stage1Data[dstIdx + 2] = data[srcIdx + 2];
-      stage1Data[dstIdx + 3] = data[srcIdx + 3];
+    if (cfg.stage1Enabled) {
+      const B = cfg.stage1BlockSize;
+      if (B <= 1) {
+        const perm = new Int32Array(M);
+        for (let i = 0; i < M; i++) perm[i] = i;
+        for (let i = M - 1; i > 0; i--) {
+          const j = prngPixel.nextInt(i + 1);
+          const temp = perm[i];
+          perm[i] = perm[j];
+          perm[j] = temp;
+        }
+
+        for (let idx = 0; idx < M; idx++) {
+          const srcIdx = targetIndices[idx] * 4;
+          const dstIdx = targetIndices[perm[idx]] * 4;
+          stage1Data[dstIdx] = data[srcIdx];
+          stage1Data[dstIdx + 1] = data[srcIdx + 1];
+          stage1Data[dstIdx + 2] = data[srcIdx + 2];
+          stage1Data[dstIdx + 3] = data[srcIdx + 3];
+        }
+      } else {
+        const part = this.partitionMaskAwareBlocks(W, H, targetIndices, B);
+        const K = part.eligibleBlocks.length;
+        if (K >= 2) {
+          const blockPerm = new Int32Array(K);
+          for (let i = 0; i < K; i++) blockPerm[i] = i;
+          for (let i = K - 1; i > 0; i--) {
+            const j = prngPixel.nextInt(i + 1);
+            const temp = blockPerm[i];
+            blockPerm[i] = blockPerm[j];
+            blockPerm[j] = temp;
+          }
+
+          for (let bIdx = 0; bIdx < K; bIdx++) {
+            const srcTop = part.eligibleBlocks[bIdx];
+            const dstTop = part.eligibleBlocks[blockPerm[bIdx]];
+            for (let dy = 0; dy < B; dy++) {
+              const sRow = srcTop + dy * W;
+              const dRow = dstTop + dy * W;
+              for (let dx = 0; dx < B; dx++) {
+                const srcIdx = (sRow + dx) * 4;
+                const dstIdx = (dRow + dx) * 4;
+                stage1Data[dstIdx] = data[srcIdx];
+                stage1Data[dstIdx + 1] = data[srcIdx + 1];
+                stage1Data[dstIdx + 2] = data[srcIdx + 2];
+                stage1Data[dstIdx + 3] = data[srcIdx + 3];
+              }
+            }
+          }
+        }
+
+        const L = part.boundaryIndices.length;
+        if (L >= 2) {
+          const boundPerm = new Int32Array(L);
+          for (let i = 0; i < L; i++) boundPerm[i] = i;
+          for (let i = L - 1; i > 0; i--) {
+            const j = prngPixel.nextInt(i + 1);
+            const temp = boundPerm[i];
+            boundPerm[i] = boundPerm[j];
+            boundPerm[j] = temp;
+          }
+
+          for (let i = 0; i < L; i++) {
+            const srcIdx = part.boundaryIndices[i] * 4;
+            const dstIdx = part.boundaryIndices[boundPerm[i]] * 4;
+            stage1Data[dstIdx] = data[srcIdx];
+            stage1Data[dstIdx + 1] = data[srcIdx + 1];
+            stage1Data[dstIdx + 2] = data[srcIdx + 2];
+            stage1Data[dstIdx + 3] = data[srcIdx + 3];
+          }
+        }
+      }
     }
 
-    // === STAGE 2: RGB CHANNEL PERMUTATION ===
+    // === STAGE 2: RGB CHANNEL PERMUTATION (Key-Driven Dynamic or Fixed) ===
     const stage2Data = new Uint8ClampedArray(stage1Data);
-    for (let idx = 0; idx < M; idx++) {
-      const pixelIdx = targetIndices[idx] * 4;
-      const r = stage1Data[pixelIdx];
-      const g = stage1Data[pixelIdx + 1];
-      const b = stage1Data[pixelIdx + 2];
-      const rgb = [r, g, b];
+    if (cfg.stage2Enabled) {
+      const isFixedPerm = cfg.stage2Mode === 'fixed';
+      const allowedIds = (cfg.stage2AllowedIds && cfg.stage2AllowedIds.length > 0)
+        ? cfg.stage2AllowedIds
+        : [0, 1, 2, 3, 4, 5];
+      const allowedCount = allowedIds.length;
+      for (let idx = 0; idx < M; idx++) {
+        const pixelIdx = targetIndices[idx] * 4;
+        const r = stage1Data[pixelIdx];
+        const g = stage1Data[pixelIdx + 1];
+        const b = stage1Data[pixelIdx + 2];
+        const rgb = [r, g, b];
 
-      const permId = prngChannel.nextInt(6);
-      const pOrder = this.CHANNEL_PERMS[permId];
+        const permIdx = isFixedPerm
+          ? cfg.stage2FixedPermId
+          : allowedIds[prngChannel.nextInt(allowedCount)];
+        const pOrder = this.CHANNEL_PERMS[permIdx];
 
-      stage2Data[pixelIdx] = rgb[pOrder[0]];
-      stage2Data[pixelIdx + 1] = rgb[pOrder[1]];
-      stage2Data[pixelIdx + 2] = rgb[pOrder[2]];
+        stage2Data[pixelIdx] = rgb[pOrder[0]];
+        stage2Data[pixelIdx + 1] = rgb[pOrder[1]];
+        stage2Data[pixelIdx + 2] = rgb[pOrder[2]];
+      }
     }
 
-    // === STAGE 3: k-MSB XOR ENCRYPTION ===
+    // === STAGE 3: k-MSB XOR ENCRYPTION (Configurable k=1..8 & Selectable R/G/B Channels) ===
+    const activeCh = [
+      !!cfg.stage3Channels.r,
+      !!cfg.stage3Channels.g,
+      !!cfg.stage3Channels.b
+    ];
     let swappedCount = 0;
     let totalDiffSq = 0;
     let channelCount = 0;
@@ -1118,9 +1733,13 @@ const BitEngine = {
         const cIdx = pixelIdx + c;
         const originalByte = originalCopy[cIdx];
         const currentByte = stage2Data[cIdx];
-        const keyBits = kVal === 2 ? prngXor.next2Bits() : prngXor.nextKBits(kVal);
+        let newByte = currentByte;
 
-        const newByte = kVal === 2 ? this.xor2MSB(currentByte, keyBits) : this.xorKMSB(currentByte, keyBits, kVal);
+        if (cfg.stage3Enabled && activeCh[c]) {
+          const keyBits = kk === 2 ? prngXor.next2Bits() : prngXor.nextKBits(kk);
+          newByte = kk === 2 ? this.xor2MSB(currentByte, keyBits) : this.xorKMSB(currentByte, keyBits, kk);
+        }
+
         data[cIdx] = newByte;
 
         if (newByte !== originalByte) swappedCount++;
@@ -1128,6 +1747,7 @@ const BitEngine = {
         totalDiffSq += diff * diff;
         channelCount++;
       }
+      data[pixelIdx + 3] = stage2Data[pixelIdx + 3];
     }
 
     const mse = channelCount > 0 ? (totalDiffSq / channelCount) : 0;
@@ -1137,68 +1757,151 @@ const BitEngine = {
       imageData,
       swappedCount,
       mse: parseFloat(mse.toFixed(4)),
-      psnr: psnr === Infinity ? '∞' : parseFloat(psnr.toFixed(2))
+      psnr: psnr === Infinity ? '∞' : parseFloat(psnr.toFixed(2)),
+      stageConfig: cfg
     };
   },
 
   /**
-   * Core 3-Stage Decryption with explicit PRNG streams and configurable k (1..8, default 2).
+   * Core 3-Stage Decryption with explicit PRNG streams, configurable k (1..8, default 2),
+   * and customizable stage configuration (reversing only enabled stages in exact inverse order).
    */
-  _decryptWithStreams(imageData, prngPixel, prngChannel, prngXor, maskOrRegions = null, kVal = 2) {
+  _decryptWithStreams(imageData, prngPixel, prngChannel, prngXor, maskOrRegions = null, kVal = 2, stageConfig = null) {
+    const cfg = this.normalizeStageConfig(stageConfig, kVal);
+    const kk = cfg.k;
+    const W = imageData.width;
+    const H = imageData.height;
     const data = imageData.data;
     const inputCopy = new Uint8ClampedArray(data);
     const targetIndices = this.getTargetPixelIndices(imageData, maskOrRegions);
     const M = targetIndices.length;
 
     if (M === 0) {
-      return { imageData, swappedCount: 0, mse: 0, psnr: '∞' };
+      return { imageData, swappedCount: 0, mse: 0, psnr: '∞', stageConfig: cfg };
     }
 
-    // === REVERSE STAGE 3: UNDO k-MSB XOR ENCRYPTION ===
+    // === REVERSE STAGE 3: UNDO k-MSB XOR ENCRYPTION (if Stage 3 was enabled) ===
     const unXorData = new Uint8ClampedArray(data);
-    for (let idx = 0; idx < M; idx++) {
-      const pixelIdx = targetIndices[idx] * 4;
-      for (let c = 0; c < 3; c++) {
-        const cIdx = pixelIdx + c;
-        const keyBits = kVal === 2 ? prngXor.next2Bits() : prngXor.nextKBits(kVal);
-        unXorData[cIdx] = kVal === 2 ? this.xor2MSB(data[cIdx], keyBits) : this.xorKMSB(data[cIdx], keyBits, kVal);
+    if (cfg.stage3Enabled) {
+      const activeCh = [
+        !!cfg.stage3Channels.r,
+        !!cfg.stage3Channels.g,
+        !!cfg.stage3Channels.b
+      ];
+      for (let idx = 0; idx < M; idx++) {
+        const pixelIdx = targetIndices[idx] * 4;
+        for (let c = 0; c < 3; c++) {
+          const cIdx = pixelIdx + c;
+          if (activeCh[c]) {
+            const keyBits = kk === 2 ? prngXor.next2Bits() : prngXor.nextKBits(kk);
+            unXorData[cIdx] = kk === 2 ? this.xor2MSB(data[cIdx], keyBits) : this.xorKMSB(data[cIdx], keyBits, kk);
+          } else {
+            unXorData[cIdx] = data[cIdx];
+          }
+        }
       }
     }
 
-    // === REVERSE STAGE 2: UNDO RGB CHANNEL PERMUTATION ===
+    // === REVERSE STAGE 2: UNDO RGB CHANNEL PERMUTATION (if Stage 2 was enabled) ===
     const unChannelData = new Uint8ClampedArray(unXorData);
-    for (let idx = 0; idx < M; idx++) {
-      const pixelIdx = targetIndices[idx] * 4;
-      const r = unXorData[pixelIdx];
-      const g = unXorData[pixelIdx + 1];
-      const b = unXorData[pixelIdx + 2];
-      const rgb = [r, g, b];
+    if (cfg.stage2Enabled) {
+      const isFixedPerm = cfg.stage2Mode === 'fixed';
+      const allowedIds = (cfg.stage2AllowedIds && cfg.stage2AllowedIds.length > 0)
+        ? cfg.stage2AllowedIds
+        : [0, 1, 2, 3, 4, 5];
+      const allowedCount = allowedIds.length;
+      for (let idx = 0; idx < M; idx++) {
+        const pixelIdx = targetIndices[idx] * 4;
+        const r = unXorData[pixelIdx];
+        const g = unXorData[pixelIdx + 1];
+        const b = unXorData[pixelIdx + 2];
+        const rgb = [r, g, b];
 
-      const permId = prngChannel.nextInt(6);
-      const invOrder = this.INV_CHANNEL_PERMS[permId];
+        const permIdx = isFixedPerm
+          ? cfg.stage2FixedPermId
+          : allowedIds[prngChannel.nextInt(allowedCount)];
+        const invOrder = this.INV_CHANNEL_PERMS[permIdx];
 
-      unChannelData[pixelIdx] = rgb[invOrder[0]];
-      unChannelData[pixelIdx + 1] = rgb[invOrder[1]];
-      unChannelData[pixelIdx + 2] = rgb[invOrder[2]];
+        unChannelData[pixelIdx] = rgb[invOrder[0]];
+        unChannelData[pixelIdx + 1] = rgb[invOrder[1]];
+        unChannelData[pixelIdx + 2] = rgb[invOrder[2]];
+      }
     }
 
-    // === REVERSE STAGE 1: UNDO PIXEL PERMUTATION ===
-    const perm = new Int32Array(M);
-    for (let i = 0; i < M; i++) perm[i] = i;
-    for (let i = M - 1; i > 0; i--) {
-      const j = prngPixel.nextInt(i + 1);
-      const temp = perm[i];
-      perm[i] = perm[j];
-      perm[j] = temp;
-    }
+    // === REVERSE STAGE 1: UNDO PIXEL PERMUTATION (if Stage 1 was enabled) ===
+    data.set(unChannelData);
+    if (cfg.stage1Enabled) {
+      const B = cfg.stage1BlockSize;
+      if (B <= 1) {
+        const perm = new Int32Array(M);
+        for (let i = 0; i < M; i++) perm[i] = i;
+        for (let i = M - 1; i > 0; i--) {
+          const j = prngPixel.nextInt(i + 1);
+          const temp = perm[i];
+          perm[i] = perm[j];
+          perm[j] = temp;
+        }
 
-    for (let idx = 0; idx < M; idx++) {
-      const srcIdx = targetIndices[perm[idx]] * 4;
-      const dstIdx = targetIndices[idx] * 4;
-      data[dstIdx] = unChannelData[srcIdx];
-      data[dstIdx + 1] = unChannelData[srcIdx + 1];
-      data[dstIdx + 2] = unChannelData[srcIdx + 2];
-      data[dstIdx + 3] = unChannelData[srcIdx + 3];
+        for (let idx = 0; idx < M; idx++) {
+          const srcIdx = targetIndices[perm[idx]] * 4;
+          const dstIdx = targetIndices[idx] * 4;
+          data[dstIdx] = unChannelData[srcIdx];
+          data[dstIdx + 1] = unChannelData[srcIdx + 1];
+          data[dstIdx + 2] = unChannelData[srcIdx + 2];
+          data[dstIdx + 3] = unChannelData[srcIdx + 3];
+        }
+      } else {
+        const part = this.partitionMaskAwareBlocks(W, H, targetIndices, B);
+        const K = part.eligibleBlocks.length;
+        if (K >= 2) {
+          const blockPerm = new Int32Array(K);
+          for (let i = 0; i < K; i++) blockPerm[i] = i;
+          for (let i = K - 1; i > 0; i--) {
+            const j = prngPixel.nextInt(i + 1);
+            const temp = blockPerm[i];
+            blockPerm[i] = blockPerm[j];
+            blockPerm[j] = temp;
+          }
+
+          for (let bIdx = 0; bIdx < K; bIdx++) {
+            const srcTop = part.eligibleBlocks[blockPerm[bIdx]];
+            const dstTop = part.eligibleBlocks[bIdx];
+            for (let dy = 0; dy < B; dy++) {
+              const sRow = srcTop + dy * W;
+              const dRow = dstTop + dy * W;
+              for (let dx = 0; dx < B; dx++) {
+                const srcIdx = (sRow + dx) * 4;
+                const dstIdx = (dRow + dx) * 4;
+                data[dstIdx] = unChannelData[srcIdx];
+                data[dstIdx + 1] = unChannelData[srcIdx + 1];
+                data[dstIdx + 2] = unChannelData[srcIdx + 2];
+                data[dstIdx + 3] = unChannelData[srcIdx + 3];
+              }
+            }
+          }
+        }
+
+        const L = part.boundaryIndices.length;
+        if (L >= 2) {
+          const boundPerm = new Int32Array(L);
+          for (let i = 0; i < L; i++) boundPerm[i] = i;
+          for (let i = L - 1; i > 0; i--) {
+            const j = prngPixel.nextInt(i + 1);
+            const temp = boundPerm[i];
+            boundPerm[i] = boundPerm[j];
+            boundPerm[j] = temp;
+          }
+
+          for (let i = 0; i < L; i++) {
+            const srcIdx = part.boundaryIndices[boundPerm[i]] * 4;
+            const dstIdx = part.boundaryIndices[i] * 4;
+            data[dstIdx] = unChannelData[srcIdx];
+            data[dstIdx + 1] = unChannelData[srcIdx + 1];
+            data[dstIdx + 2] = unChannelData[srcIdx + 2];
+            data[dstIdx + 3] = unChannelData[srcIdx + 3];
+          }
+        }
+      }
     }
 
     let swappedCount = 0;
@@ -1225,7 +1928,8 @@ const BitEngine = {
       imageData,
       swappedCount,
       mse: parseFloat(mse.toFixed(4)),
-      psnr: psnr === Infinity ? '∞' : parseFloat(psnr.toFixed(2))
+      psnr: psnr === Infinity ? '∞' : parseFloat(psnr.toFixed(2)),
+      stageConfig: cfg
     };
   },
 
@@ -1925,8 +2629,11 @@ const BitEngine = {
       rawExtFlags = 0
     } = params;
 
-    if (k < 1 || k > 8) {
-      throw new Error(`Invalid MSB bit depth (k = ${k}): Must be between 1 and 8.`);
+    const stageCfg = this.normalizeStageConfig(params.stageConfig || params, k);
+    const effectiveK = stageCfg.k;
+
+    if (effectiveK < 1 || effectiveK > 8) {
+      throw new Error(`Invalid MSB bit depth (k = ${effectiveK}): Must be between 1 and 8.`);
     }
     if (originalColorMode < 0 || originalColorMode > 2) {
       throw new Error(`Invalid original colour mode (${originalColorMode}).`);
@@ -1976,11 +2683,22 @@ const BitEngine = {
     }
 
     const hasOptionalTlv = tlvChunks.length > 0;
-    const extFlagsVal = ((maskProtected ? 0x01 : 0x00) | (hasOptionalTlv ? 0x02 : 0x00) | (rawExtFlags & 0xFC)) & 0xFF;
+    const hasStageConfig = !stageCfg.isStandardDefault
+      || params.encryptionMode === 'advanced'
+      || (params.stageConfig && params.stageConfig.encryptionMode === 'advanced')
+      || !!params.alwaysIncludeStageConfig;
+    const stageConfigBytes = hasStageConfig ? this.encodeStageConfigBytes(stageCfg, effectiveK) : new Uint8Array(0);
+
+    const extFlagsVal = (
+      (maskProtected ? 0x01 : 0x00) |
+      (hasOptionalTlv ? 0x02 : 0x00) |
+      (hasStageConfig ? 0x04 : 0x00) |
+      (rawExtFlags & 0xF8)
+    ) & 0xFF;
     const hasExtFlags = extFlagsVal !== 0 ? 1 : 0;
 
     const byte0 = ((this.FYP_COMPACT_MAGIC_NIBBLE & 0x0F) << 4) | (this.FYP_META_VERSION_V2 & 0x0F);
-    const byte1 = (((k - 1) & 0x07) << 5)
+    const byte1 = (((effectiveK - 1) & 0x07) << 5)
                 | ((scopeCode & 0x03) << 3)
                 | ((keyTypeCode & 0x01) << 2)
                 | (originalColorMode & 0x03);
@@ -1998,7 +2716,7 @@ const BitEngine = {
       for (const tc of tlvChunks) tlvTotalBytes += tc.byteLength;
     }
 
-    const headerPrefixLen = 3 + (hasExtFlags ? 1 : 0) + kdfVarint.byteLength;
+    const headerPrefixLen = 3 + (hasExtFlags ? 1 : 0) + stageConfigBytes.byteLength + kdfVarint.byteLength;
     const totalLen = headerPrefixLen + 16 + 32 + maskLenVarint.byteLength + maskByteLen + tlvTotalBytes;
     const buf = new Uint8Array(totalLen);
 
@@ -2008,6 +2726,10 @@ const BitEngine = {
     buf[pos++] = byte2;
     if (hasExtFlags) {
       buf[pos++] = extFlagsVal;
+    }
+    if (stageConfigBytes.byteLength > 0) {
+      buf.set(stageConfigBytes, pos);
+      pos += stageConfigBytes.byteLength;
     }
     if (kdfVarint.byteLength > 0) {
       buf.set(kdfVarint, pos);
@@ -2087,15 +2809,40 @@ const BitEngine = {
     let extFlags = 0;
     let maskProtected = false;
     let hasOptionalTlv = false;
+    let hasStageConfig = false;
+    let stageConfigOffset = -1;
 
     if (hasExtFlags) {
       if (pos >= bytes.byteLength) throw new Error("Truncated extension flags in v2 msBX chunk.");
       extFlags = bytes[pos++];
-      if ((extFlags & 0xFC) !== 0) {
+      if ((extFlags & 0xF8) !== 0) {
         throw new Error(`Unsupported required extension flags (0x${extFlags.toString(16)}) in PNG metadata.`);
       }
       maskProtected = (extFlags & 0x01) !== 0;
       hasOptionalTlv = (extFlags & 0x02) !== 0;
+      hasStageConfig = (extFlags & 0x04) !== 0;
+    }
+
+    let stageConfig;
+    if (hasStageConfig) {
+      if (pos + 2 > bytes.byteLength) {
+        throw new Error("Truncated stage configuration in v2 msBX chunk.");
+      }
+      stageConfigOffset = pos;
+      const sb0 = bytes[pos++];
+      const sb1 = bytes[pos++];
+      let sb2 = 0x3F;
+      const s2On = ((sb0 >>> 5) & 1) === 1;
+      const s2Fixed = ((sb0 >>> 3) & 1) === 1;
+      if (s2On && !s2Fixed && (sb0 & 0x07) === 0x07) {
+        if (pos >= bytes.byteLength) {
+          throw new Error("Truncated Stage 2 allowed permutations mask in v2 msBX chunk.");
+        }
+        sb2 = bytes[pos++];
+      }
+      stageConfig = this.decodeStageConfigBytes(sb0, sb1, k, sb2);
+    } else {
+      stageConfig = this.normalizeStageConfig(null, k);
     }
 
     let iterations = 100000;
@@ -2275,6 +3022,22 @@ const BitEngine = {
       optionalFields,
       hasExtFlags: !!hasExtFlags,
       extFlags,
+      hasStageConfig,
+      stageConfigOffset,
+      stageConfig,
+      encryptionMode: stageConfig.encryptionMode,
+      stage1Enabled: stageConfig.stage1Enabled,
+      stage1AlgoId: stageConfig.stage1AlgoId,
+      stage1BlockSize: stageConfig.stage1BlockSize,
+      stage2Enabled: stageConfig.stage2Enabled,
+      stage2Mode: stageConfig.stage2Mode,
+      stage2FixedPermId: stageConfig.stage2FixedPermId,
+      stage2FixedPermLabel: stageConfig.stage2FixedPermLabel,
+      stage3Enabled: stageConfig.stage3Enabled,
+      stage3Channels: stageConfig.stage3Channels,
+      channelMask: stageConfig.channelMask,
+      enabledStagesSummary: stageConfig.enabledStagesSummary,
+      reverseStagesSummary: stageConfig.reverseStagesSummary,
       byteLength: bytes.byteLength
     };
   },
@@ -2285,13 +3048,13 @@ const BitEngine = {
    * `msBx` Payload Layout (Big-Endian network byte order):
    * - [0..7]   8B : ASCII FYP Identifier "KENX-ENC"
    * - [8]      1B : Metadata format version (1)
-   * - [9]      1B : Encryption algorithm version (1)
+   * - [9]      1B : Encryption algorithm version (1) + [bits 7..3: stage1BlockSize - 1]
    * - [10]     1B : Original colour mode (0 = Grayscale 8-bit, 1 = RGB 24-bit, 2 = RGBA 32-bit)
    * - [11]     1B : Number of encrypted MSB bits, k (1..8, default 2)
    * - [12]     1B : Key type identifier (0 = Password, 1 = Key Image)
    * - [13]     1B : Encryption scope (0 = Full Image, 1 = Body, 2 = Face, 3 = Custom ROI)
-   * - [14]     1B : Mask encoding (0 = None, 1 = Plain RLE-Varint, 2 = Keystream-Encrypted RLE-Varint)
-   * - [15]     1B : Reserved flags (0)
+   * - [14]     1B : Mask encoding (0 = None, 1 = Plain RLE-Varint, 2 = Keystream-Encrypted RLE-Varint) + [bits 6..4: channelMask^7]
+   * - [15]     1B : Stage configuration byte (0 = Standard 3-Stage default; else stageByte0 with bit 7 set)
    * - [16..19] 4B : Original image width (uint32 BE)
    * - [20..23] 4B : Original image height (uint32 BE)
    * - [24..27] 4B : KDF iteration count (uint32 BE, default 100,000)
@@ -2318,6 +3081,13 @@ const BitEngine = {
       encodedMaskBytes = null
     } = params;
 
+    const stageCfg = this.normalizeStageConfig(params.stageConfig || params, k);
+    const effectiveK = stageCfg.k;
+    const hasCustomStage = !stageCfg.isStandardDefault
+      || params.encryptionMode === 'advanced'
+      || (params.stageConfig && params.stageConfig.encryptionMode === 'advanced');
+    const scBytes = hasCustomStage ? this.encodeStageConfigBytes(stageCfg, effectiveK) : null;
+
     const scopeCodeMap = { full: 0, person: 1, face: 2, custom: 3 };
     const hasMask = encodedMaskBytes && encodedMaskBytes.byteLength > 0;
     const scopeCode = hasMask ? (scopeCodeMap[scope] || 3) : 0;
@@ -2333,13 +3103,22 @@ const BitEngine = {
       buf[i] = this.FYP_MAGIC_ID.charCodeAt(i) & 0xFF;
     }
     buf[8] = this.FYP_META_VERSION;
-    buf[9] = this.FYP_ALGO_VERSION;
+    buf[9] = (this.FYP_ALGO_VERSION & 0x07) | (((stageCfg.stage1BlockSize - 1) & 0x1F) << 3);
     buf[10] = originalColorMode & 0xFF;
-    buf[11] = k & 0xFF;
-    buf[12] = keyTypeCode;
+    buf[11] = effectiveK & 0xFF;
+    const v1AllowedMask = (stageCfg.stage2Mode === 'fixed' || stageCfg.stage2AllowedMask === 0x3F)
+      ? 0
+      : (((stageCfg.stage2AllowedMask ^ 0x3F) & 0x3F) << 1);
+    buf[12] = (keyTypeCode & 0x01) | (v1AllowedMask & 0x7E);
     buf[13] = scopeCode;
-    buf[14] = actualMaskEncoding;
-    buf[15] = 0; // reserved
+    if (scBytes) {
+      const chXor = ((scBytes[1] & 0x07) ^ 0x07) & 0x07;
+      buf[14] = (actualMaskEncoding & 0x0F) | (chXor << 4);
+      buf[15] = (scBytes[0] | 0x80) & 0xFF;
+    } else {
+      buf[14] = actualMaskEncoding;
+      buf[15] = 0; // reserved (Standard Mode default)
+    }
 
     dv.setUint32(16, width >>> 0, false);
     dv.setUint32(20, height >>> 0, false);
@@ -2385,7 +3164,9 @@ const BitEngine = {
       throw new Error(`Unsupported FYP metadata version (v${metaVersion}): Only versions 1 and 2 are supported.`);
     }
 
-    const algoVersion = bytes[9];
+    const rawByte9 = bytes[9];
+    const algoVersion = rawByte9 & 0x07;
+    const v1BlockSize = ((rawByte9 >>> 3) & 0x1F) + 1;
     if (algoVersion !== this.FYP_ALGO_VERSION) {
       throw new Error(`Unsupported encryption algorithm version (v${algoVersion}): Only version ${this.FYP_ALGO_VERSION} is supported.`);
     }
@@ -2400,9 +3181,10 @@ const BitEngine = {
       throw new Error(`Invalid MSB bit depth (k = ${k}) in PNG metadata: Must be between 1 and 8.`);
     }
 
-    const keyTypeCode = bytes[12];
+    const rawByte12 = bytes[12];
+    const keyTypeCode = (bytes[15] !== 0 && (rawByte12 & 0x80) === 0) ? (rawByte12 & 0x01) : rawByte12;
     if (keyTypeCode !== 0 && keyTypeCode !== 1) {
-      throw new Error(`Invalid key type identifier (${keyTypeCode}) in PNG metadata.`);
+      throw new Error(`Invalid key type identifier (${rawByte12}) in PNG metadata.`);
     }
 
     const scopeCode = bytes[13];
@@ -2410,9 +3192,24 @@ const BitEngine = {
       throw new Error(`Invalid encryption scope code (${scopeCode}) in PNG metadata.`);
     }
 
-    const maskEncoding = bytes[14];
+    const rawByte14 = bytes[14];
+    const reservedByte15 = bytes[15];
+    const maskEncoding = reservedByte15 !== 0 ? (rawByte14 & 0x0F) : rawByte14;
     if (maskEncoding > 2) {
       throw new Error(`Unsupported segmentation mask encoding (${maskEncoding}) in PNG metadata.`);
+    }
+
+    let stageConfig;
+    if (reservedByte15 !== 0) {
+      if ((rawByte14 & 0x80) !== 0) {
+        throw new Error(`Unsupported reserved bits in PNG metadata byte 14 (0x${rawByte14.toString(16)}).`);
+      }
+      const chMask = (((rawByte14 >>> 4) & 0x07) ^ 0x07) & 0x07;
+      const sb1 = (((v1BlockSize - 1) & 0x1F) << 3) | chMask;
+      const v1Allowed = (((bytes[12] >>> 1) & 0x3F) ^ 0x3F) || 0x3F;
+      stageConfig = this.decodeStageConfigBytes(reservedByte15, sb1, k, v1Allowed);
+    } else {
+      stageConfig = this.normalizeStageConfig({ stage1BlockSize: v1BlockSize }, k);
     }
 
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -2500,6 +3297,22 @@ const BitEngine = {
       plainMaskRleBytes,
       mask,
       optionalFields: [],
+      hasStageConfig: reservedByte15 !== 0 || v1BlockSize > 1,
+      stageConfigOffset: 15,
+      stageConfig,
+      encryptionMode: stageConfig.encryptionMode,
+      stage1Enabled: stageConfig.stage1Enabled,
+      stage1AlgoId: stageConfig.stage1AlgoId,
+      stage1BlockSize: stageConfig.stage1BlockSize,
+      stage2Enabled: stageConfig.stage2Enabled,
+      stage2Mode: stageConfig.stage2Mode,
+      stage2FixedPermId: stageConfig.stage2FixedPermId,
+      stage2FixedPermLabel: stageConfig.stage2FixedPermLabel,
+      stage3Enabled: stageConfig.stage3Enabled,
+      stage3Channels: stageConfig.stage3Channels,
+      channelMask: stageConfig.channelMask,
+      enabledStagesSummary: stageConfig.enabledStagesSummary,
+      reverseStagesSummary: stageConfig.reverseStagesSummary,
       byteLength: bytes.byteLength
     };
   },
@@ -2518,13 +3331,16 @@ const BitEngine = {
     const width = imageData.width;
     const height = imageData.height;
     const totalPixels = width * height;
-    const kVal = Math.max(1, Math.min(8, (options.k || this.DEFAULT_K) | 0));
+    const kVal = Math.max(1, Math.min(8, (options.k || (options.stageConfig && options.stageConfig.k) || this.DEFAULT_K) | 0));
+    const stageConfig = this.normalizeStageConfig(options.stageConfig || options, kVal);
+    const effectiveK = stageConfig.k;
     const iterations = Math.max(1, (options.iterations || this.DEFAULT_ITERATIONS) | 0);
     const keyType = options.keyType === 'image' ? 'image' : 'text';
     const scope = options.scope || 'full';
     const protectMask = !!options.protectMask;
     const metaVersion = options.metaVersion === 1 ? 1 : 2;
     const optionalFields = Array.isArray(options.optionalFields) ? options.optionalFields : null;
+    const explicitAdv = options.encryptionMode === 'advanced' || (options.stageConfig && options.stageConfig.encryptionMode === 'advanced');
 
     // 1. Detect original image colour mode (0 = Grayscale, 1 = RGB, 2 = RGBA)
     const originalColorMode = (typeof options.originalColorMode === 'number')
@@ -2598,7 +3414,7 @@ const BitEngine = {
       const prelimV2 = this.encodeMsBxMetadataV2({
         algoVersion: this.FYP_ALGO_VERSION,
         originalColorMode,
-        k: kVal,
+        k: effectiveK,
         keyType,
         scope: effectiveScope,
         maskCodec,
@@ -2607,7 +3423,9 @@ const BitEngine = {
         salt,
         verificationTag: new Uint8Array(32).fill(1),
         encodedMaskBytes,
-        optionalFields
+        optionalFields,
+        stageConfig,
+        encryptionMode: explicitAdv ? 'advanced' : stageConfig.encryptionMode
       });
       const decodedPrelim = this.decodeMsBxMetadataV2(prelimV2, masterKey, { width, height });
       const verifyTagV2 = this.computePngVerificationTagV2(
@@ -2622,7 +3440,7 @@ const BitEngine = {
       msBxPayload = this.encodeMsBxMetadataV2({
         algoVersion: this.FYP_ALGO_VERSION,
         originalColorMode,
-        k: kVal,
+        k: effectiveK,
         keyType,
         scope: effectiveScope,
         maskCodec,
@@ -2631,12 +3449,14 @@ const BitEngine = {
         salt,
         verificationTag: verifyTagV2,
         encodedMaskBytes,
-        optionalFields
+        optionalFields,
+        stageConfig,
+        encryptionMode: explicitAdv ? 'advanced' : stageConfig.encryptionMode
       });
     } else {
       const prelimMeta = this.encodeMsBxMetadata({
         originalColorMode,
-        k: kVal,
+        k: effectiveK,
         keyType,
         scope: effectiveScope,
         maskEncoding,
@@ -2645,7 +3465,9 @@ const BitEngine = {
         iterations,
         salt,
         verificationTag: new Uint8Array(32),
-        encodedMaskBytes
+        encodedMaskBytes,
+        stageConfig,
+        encryptionMode: explicitAdv ? 'advanced' : stageConfig.encryptionMode
       });
       const verifyTag = this.computePngVerificationTag(
         masterKey,
@@ -2656,7 +3478,7 @@ const BitEngine = {
       );
       msBxPayload = this.encodeMsBxMetadata({
         originalColorMode,
-        k: kVal,
+        k: effectiveK,
         keyType,
         scope: effectiveScope,
         maskEncoding,
@@ -2665,16 +3487,18 @@ const BitEngine = {
         iterations,
         salt,
         verificationTag: verifyTag,
-        encodedMaskBytes
+        encodedMaskBytes,
+        stageConfig,
+        encryptionMode: explicitAdv ? 'advanced' : stageConfig.encryptionMode
       });
     }
 
-    // 6. Execute 3-Stage Reversible Encryption Pipeline
+    // 6. Execute 3-Stage Reversible Encryption Pipeline (according to stageConfig)
     const prngPixel = this.createDomainPRNG(masterKey, salt, 'STAGE1_PIXEL_PERM');
     const prngChannel = this.createDomainPRNG(masterKey, salt, 'STAGE2_CHANNEL_PERM');
     const prngXor = this.createDomainPRNG(masterKey, salt, 'STAGE3_MSB_XOR');
 
-    const encResult = this._encryptWithStreams(imageData, prngPixel, prngChannel, prngXor, maskOrRegions, kVal);
+    const encResult = this._encryptWithStreams(imageData, prngPixel, prngChannel, prngXor, maskOrRegions, effectiveK, stageConfig);
     const encryptedPixelsBeforePng = new Uint8ClampedArray(encResult.imageData.data);
 
     // 7. Encode encrypted pixels + `msBX` chunk into a lossless PNG file
@@ -2791,7 +3615,7 @@ const BitEngine = {
   /**
    * Decrypt and verify a Self-Describing Encrypted PNG file (`encrypted_photo.png`).
    * Reconstructs the key streams from the embedded `msBX` (or legacy `msBx`) metadata + user key,
-   * reverses the 3 encryption stages in exact inverse order, and verifies the 32-byte
+   * reverses the enabled encryption stages in exact inverse order, and verifies the 32-byte
    * SHA-256 original pixel verification tag before returning the recovered image.
    */
   async decryptFromPNG(bufferOrBytes, passwordOrKey) {
@@ -2829,7 +3653,7 @@ const BitEngine = {
       throw new Error("Missing or invalid segmentation mask for selective decryption.");
     }
 
-    // 3. Reverse the 3 encryption stages on a working copy of the encrypted pixels
+    // 3. Reverse only the enabled encryption stages in exact inverse order on a working copy of the encrypted pixels
     const workingImageData = new ImageData(
       new Uint8ClampedArray(previewImageData.data),
       metadata.width,
@@ -2846,7 +3670,8 @@ const BitEngine = {
       prngChannel,
       prngXor,
       metadata.mask,
-      metadata.k
+      metadata.k,
+      metadata.stageConfig
     );
 
     // 4. Verify SHA-256 over the recovered pixel bytes against the original verification tag
@@ -3499,6 +4324,10 @@ const BitEngine = {
       },
       next2Bits() {
         return (this.nextUint32() & 0x03);
+      },
+      nextKBits(k) {
+        const kk = Math.max(1, Math.min(8, k | 0));
+        return (this.nextUint32() & ((1 << kk) - 1));
       }
     };
   },
@@ -3877,6 +4706,10 @@ const BitEngine = {
       },
       next2Bits() {
         return (this.nextUint32() & 0x03);
+      },
+      nextKBits(k) {
+        const kk = Math.max(1, Math.min(8, k | 0));
+        return (this.nextUint32() & ((1 << kk) - 1));
       },
       nextKBits(k = 2) {
         const mask = (1 << Math.max(1, Math.min(8, k))) - 1;
@@ -4820,13 +5653,15 @@ const BitEngine = {
         let pos = 3;
         let hasOptTlv = false;
         let maskProt = false;
+        let hasStageCfg = false;
         if (hasExt && pos < bytes.byteLength) {
           const extB = bytes[pos];
           maskProt = (extB & 0x01) !== 0;
           hasOptTlv = (extB & 0x02) !== 0;
+          hasStageCfg = (extB & 0x04) !== 0;
           fields.push({
             field: 'Extension Flags Byte',
-            value: `maskProtected=${maskProt ? 1 : 0}, hasOptionalTLV=${hasOptTlv ? 1 : 0}`,
+            value: `maskProtected=${maskProt ? 1 : 0}, hasOptionalTLV=${hasOptTlv ? 1 : 0}, hasStageConfig=${hasStageCfg ? 1 : 0}`,
             rawHex: `0x${extB.toString(16).padStart(2, '0').toUpperCase()}`,
             rawBinary: toBin8(extB),
             chunkByteOffset: pos,
@@ -4837,9 +5672,142 @@ const BitEngine = {
             storage: '1 byte (8 bits)',
             storageBits: 8,
             category: 'header',
-            description: 'Bit 0 = keystream-protected mask; Bit 1 = optional TLV metadata present.'
+            description: 'Bit 0 = keystream-protected mask; Bit 1 = optional TLV metadata; Bit 2 = custom 2-byte Stage Configuration.'
           });
           pos++;
+        }
+
+        if (hasStageCfg && pos + 2 <= bytes.byteLength) {
+          const sb0 = bytes[pos];
+          const sb1 = bytes[pos + 1];
+          const isAdv = ((sb0 >>> 7) & 1) === 1;
+          const s1On = ((sb0 >>> 6) & 1) === 1;
+          const s2On = ((sb0 >>> 5) & 1) === 1;
+          const s3On = ((sb0 >>> 4) & 1) === 1;
+          const s2Fixed = ((sb0 >>> 3) & 1) === 1;
+          const fixedId = sb0 & 0x07;
+          const fixedLbl = this.CHANNEL_PERM_LABELS[fixedId] || `ID ${fixedId}`;
+          const s1BlockSize = ((sb1 >>> 3) & 0x1F) + 1;
+          const chMask = sb1 & 0x07;
+          const chNames = [];
+          if (chMask & 0x04) chNames.push('R');
+          if (chMask & 0x02) chNames.push('G');
+          if (chMask & 0x01) chNames.push('B');
+
+          fields.push({
+            field: 'Encryption Mode & Enabled Stage Flags',
+            value: `${isAdv ? 'Advanced Mode (1)' : 'Standard Mode (0)'} • S1=${s1On ? 'ON' : 'OFF'}, S2=${s2On ? 'ON' : 'OFF'}, S3=${s3On ? 'ON' : 'OFF'}`,
+            rawHex: `0x${sb0.toString(16).padStart(2, '0').toUpperCase()}`,
+            rawBinary: `${toBin8(sb0).slice(0, 4)} ....`,
+            chunkByteOffset: pos,
+            chunkByteEnd: pos,
+            fileByteOffset: dataOffset + pos,
+            fileByteEnd: dataOffset + pos,
+            bitRange: `Byte ${pos} [bits 7..4]`,
+            storage: '4 bits (0.5 B)',
+            storageBits: 4,
+            category: 'config',
+            description: 'Bit 7 = Mode (0=Standard, 1=Advanced); Bit 6 = Stage 1 Enable; Bit 5 = Stage 2 Enable; Bit 4 = Stage 3 Enable.'
+          });
+          const isCustomS2 = s2On && !s2Fixed && (sb0 & 0x07) === 0x07;
+          let s2CustomMask = 0x3F;
+          let s2CustomLabels = [];
+          if (isCustomS2 && pos + 2 < bytes.byteLength) {
+            s2CustomMask = bytes[pos + 2] & 0x3F;
+            for (let i = 0; i < 6; i++) {
+              if ((s2CustomMask & (1 << i)) !== 0) s2CustomLabels.push(this.CHANNEL_PERM_LABELS[i]);
+            }
+          }
+
+          fields.push({
+            field: 'Stage 2 RGB Permutation Mode & Order',
+            value: !s2On
+              ? 'Stage 2 Disabled'
+              : (s2Fixed
+                ? `Experimental Fixed Permutation (${fixedLbl}, ID=${fixedId})`
+                : (isCustomS2
+                  ? `Key-Driven Dynamic Subset (${s2CustomLabels.length} allowed: ${s2CustomLabels.join(', ')})`
+                  : 'Key-Driven Dynamic PRNG (All 6 S₃ Permutations)')),
+            rawHex: `0x${sb0.toString(16).padStart(2, '0').toUpperCase()}`,
+            rawBinary: `.... ${toBin8(sb0).slice(4, 8)}`,
+            chunkByteOffset: pos,
+            chunkByteEnd: pos,
+            fileByteOffset: dataOffset + pos,
+            fileByteEnd: dataOffset + pos,
+            bitRange: `Byte ${pos} [bits 3..0]`,
+            storage: '4 bits (0.5 B)',
+            storageBits: 4,
+            category: 'config',
+            description: 'Bit 3 = Stage 2 Mode (0=Key-Driven, 1=Fixed); Bits 2..0 = Fixed RGB Order (0..5) or 0x07 for custom dynamic subset.'
+          });
+          if (isCustomS2 && pos + 2 < bytes.byteLength) {
+            fields.push({
+              field: 'Stage 2 Allowed Dynamic Permutation Subset',
+              value: `6-bit Mask=0x${s2CustomMask.toString(16).padStart(2, '0').toUpperCase()} • ${s2CustomLabels.length} Permutations: [${s2CustomLabels.join(', ')}]`,
+              rawHex: `0x${s2CustomMask.toString(16).padStart(2, '0').toUpperCase()}`,
+              rawBinary: `.. ${toBin8(s2CustomMask).slice(2, 8)}`,
+              chunkByteOffset: pos + 2,
+              chunkByteEnd: pos + 2,
+              fileByteOffset: dataOffset + pos + 2,
+              fileByteEnd: dataOffset + pos + 2,
+              bitRange: `Byte ${pos + 2} [bits 5..0]`,
+              storage: '6 bits (1 B byte-aligned)',
+              storageBits: 6,
+              category: 'config',
+              description: '6-bit mask of allowed RGB permutations (Bit 0=RGB, Bit 1=RBG, Bit 2=GRB, Bit 3=GBR, Bit 4=BRG, Bit 5=BGR).'
+            });
+          }
+          fields.push({
+            field: 'Stage 1 Pixel Block Size (B × B)',
+            value: !s1On
+              ? 'Stage 1 Disabled'
+              : `${s1BlockSize} × ${s1BlockSize} px (${(s1BlockSize * s1BlockSize).toLocaleString()} px/block) — ${s1BlockSize === 1 ? 'Individual Pixel Shuffle' : 'Mask-Aware Block Shuffle'}`,
+            rawHex: `0x${sb1.toString(16).padStart(2, '0').toUpperCase()}`,
+            rawBinary: `${toBin8(sb1).slice(0, 5)} ...`,
+            chunkByteOffset: pos + 1,
+            chunkByteEnd: pos + 1,
+            fileByteOffset: dataOffset + pos + 1,
+            fileByteEnd: dataOffset + pos + 1,
+            bitRange: `Byte ${pos + 1} [bits 7..3]`,
+            storage: '5 bits',
+            storageBits: 5,
+            category: 'config',
+            description: 'Bits 7..3 store (stage1BlockSize - 1) as a 5-bit integer (0..31 => 1×1 to 32×32 px).'
+          });
+          fields.push({
+            field: 'Stage 3 RGB Channel Bitmask',
+            value: !s3On
+              ? 'Stage 3 Disabled'
+              : `S3 Channels=${chNames.join('+') || 'None'} (0b${(chMask & 7).toString(2).padStart(3, '0')})`,
+            rawHex: `0x${sb1.toString(16).padStart(2, '0').toUpperCase()}`,
+            rawBinary: `..... ${toBin8(sb1).slice(5, 8)}`,
+            chunkByteOffset: pos + 1,
+            chunkByteEnd: pos + 1,
+            fileByteOffset: dataOffset + pos + 1,
+            fileByteEnd: dataOffset + pos + 1,
+            bitRange: `Byte ${pos + 1} [bits 2..0]`,
+            storage: '3 bits',
+            storageBits: 3,
+            category: 'config',
+            description: 'Bits 2..0 = Stage 3 XOR Channels (Bit 2=Red, Bit 1=Green, Bit 0=Blue).'
+          });
+          pos += (isCustomS2 && pos + 2 < bytes.byteLength) ? 3 : 2;
+        } else {
+          fields.push({
+            field: 'Encryption Mode & Stage Configuration',
+            value: 'Standard Mode (S1 Fisher–Yates 1×1 → S2 Keyed RGB → S3 k-MSB XOR on R+G+B)',
+            rawHex: `0x${b2.toString(16).padStart(2, '0').toUpperCase()}`,
+            rawBinary: `${toBin8(b2).slice(0, 2)} ......`,
+            chunkByteOffset: 2,
+            chunkByteEnd: 2,
+            fileByteOffset: dataOffset + 2,
+            fileByteEnd: dataOffset + 2,
+            bitRange: 'Byte 2 [bits 7..6] (Implicit Standard Default)',
+            storage: '0 extra bytes',
+            storageBits: 0,
+            category: 'config',
+            description: 'When hasStageConfig=0, all 3 standard stages (Keyed Fisher–Yates 1×1, Keyed RGB, and R+G+B XOR) are automatically enabled.'
+          });
         }
 
         if (kdfPreset === 3 && pos < bytes.byteLength) {
@@ -5016,7 +5984,12 @@ const BitEngine = {
         : 'Truncated';
       addV1Field('ASCII Magic Identifier', 0, 8, `"${magicStr}"`, 'header', '8-byte ASCII identifier (redundant with msBX chunk type).');
       if (bytes.byteLength > 8) addV1Field('Format Version', 8, 1, `v${bytes[8]} (Legacy 76B Schema)`, 'header', 'Metadata schema version 1.');
-      if (bytes.byteLength > 9) addV1Field('Algorithm Version', 9, 1, `v${bytes[9]} (MSB 3-Stage)`, 'config', 'Encryption algorithm version.');
+      if (bytes.byteLength > 9) {
+        const b9 = bytes[9];
+        const aVer = b9 & 0x07;
+        const s1Blk = ((b9 >>> 3) & 0x1F) + 1;
+        addV1Field('Algorithm Version & Stage 1 Block Size', 9, 1, `v${aVer} (MSB 3-Stage) • Stage 1 Block=${s1Blk}×${s1Blk} px`, 'config', 'Bits 2..0 = Encryption algorithm version (1); Bits 7..3 = Stage 1 Pixel Block Size - 1 (0..31 => 1×1..32×32 px).');
+      }
       if (bytes.byteLength > 10) {
         const cm = bytes[10];
         const cmNames = ['Grayscale (0)', 'RGB (1)', 'RGBA (2)'];
@@ -5029,8 +6002,26 @@ const BitEngine = {
         const scNames = ['Full Image (0)', 'Body (1)', 'Face (2)', 'Custom ROI (3)'];
         addV1Field('Encryption Scope', 13, 1, scNames[sc] || `Scope ${sc}`, 'config', '1-byte scope code (only 2 bits needed).');
       }
-      if (bytes.byteLength > 14) addV1Field('Mask Encoding', 14, 1, `Mode ${bytes[14]}`, 'mask', '0 = None, 1 = Plain RLE, 2 = Keystream-XOR RLE.');
-      if (bytes.byteLength > 15) addV1Field('Reserved Padding Byte', 15, 1, `0x${bytes[15].toString(16).padStart(2, '0')}`, 'dedup', 'Unused reserved byte in v1 header.');
+      if (bytes.byteLength > 14) {
+        const b14 = bytes[14];
+        const b15 = bytes.byteLength > 15 ? bytes[15] : 0;
+        const mEnc = b15 !== 0 ? (b14 & 0x0F) : b14;
+        const chMask = b15 !== 0 ? ((((b14 >>> 4) & 0x07) ^ 0x07) & 0x07) : 0x07;
+        addV1Field('Mask Encoding & Channel Bits', 14, 1, `MaskMode=${mEnc} • S3 Channels=0b${chMask.toString(2).padStart(3, '0')}`, 'mask', 'Bits 3..0 = Mask encoding (0=None, 1=RLE, 2=XOR-RLE); Bits 6..4 = Stage 3 RGB channel mask.');
+      }
+      if (bytes.byteLength > 15) {
+        const b15 = bytes[15];
+        if (b15 !== 0) {
+          const s1On = ((b15 >>> 6) & 1) === 1;
+          const s2On = ((b15 >>> 5) & 1) === 1;
+          const s3On = ((b15 >>> 4) & 1) === 1;
+          const s2Fixed = ((b15 >>> 3) & 1) === 1;
+          const fixedLbl = this.CHANNEL_PERM_LABELS[b15 & 0x07] || 'RGB';
+          addV1Field('Stage Configuration Flags', 15, 1, `S1=${s1On ? 'ON' : 'OFF'}, S2=${s2On ? (s2Fixed ? 'Fixed-' + fixedLbl : 'Keyed') : 'OFF'}, S3=${s3On ? 'ON' : 'OFF'}`, 'config', 'Bit-packed Stage 1/2/3 enable flags and Stage 2 RGB permutation mode.');
+        } else {
+          addV1Field('Stage Config / Reserved Byte', 15, 1, '0x00 (Standard Mode 3-Stage Default)', 'dedup', '0x00 = Standard Mode (all 3 stages enabled); non-zero = Advanced Stage Config.');
+        }
+      }
       if (dv && bytes.byteLength >= 20) addV1Field('Image Width (Redundant with IHDR)', 16, 4, `${dv.getUint32(16, false)} px`, 'dedup', '4-byte uint32 BE width (duplicates IHDR width).');
       if (dv && bytes.byteLength >= 24) addV1Field('Image Height (Redundant with IHDR)', 20, 4, `${dv.getUint32(20, false)} px`, 'dedup', '4-byte uint32 BE height (duplicates IHDR height).');
       if (dv && bytes.byteLength >= 28) addV1Field('KDF Iterations', 24, 4, `${dv.getUint32(24, false).toLocaleString()} rounds`, 'kdf', '4-byte uint32 BE SHA-256 iteration count.');
