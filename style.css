@@ -4214,6 +4214,357 @@ canvas {
   }
 }
 
+/* ==========================================================================
+   Custom Stage Execution Order & Stage 2 Sequence Reordering Cards
+   ========================================================================== */
+.adv-order-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.adv-order-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.adv-order-title {
+  font-size: 13px;
+  color: var(--text-main);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.adv-order-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.adv-order-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--bg-subtle);
+  border: 1.5px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  cursor: grab;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+  user-select: none;
+}
+
+.adv-order-item:hover {
+  border-color: var(--primary);
+  background: var(--bg-card);
+}
+
+.adv-order-item.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.adv-order-item.drag-over {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+}
+
+.adv-order-item.stage-skipped {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+.adv-order-item-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.adv-order-drag-handle {
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: grab;
+  padding: 2px 4px;
+}
+
+.adv-order-step-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #ffffff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.adv-order-item-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.adv-order-item-info strong {
+  font-size: 12.5px;
+  color: var(--text-main);
+  line-height: 1.25;
+}
+
+.adv-order-item-info span {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.adv-order-arrows {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.adv-order-arrow-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  border: 1px solid var(--border-medium);
+  background: var(--bg-card);
+  color: var(--text-main);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.adv-order-arrow-btn:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.adv-order-arrow-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.adv-s2-seq-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+/* ==========================================================================
+   Decrypt Page: Vertical Stack Arrow & Optional Original Comparison Section
+   ========================================================================== */
+.dec-stack-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--primary);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.dec-compare-details {
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.dec-compare-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+  background: var(--bg-subtle);
+  transition: background 0.15s ease;
+}
+
+.dec-compare-summary::-webkit-details-marker {
+  display: none;
+}
+
+.dec-compare-summary:hover {
+  background: var(--bg-card-hover);
+}
+
+.dec-compare-summary-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dec-compare-summary-left i {
+  font-size: 18px;
+  color: var(--primary);
+}
+
+.dec-compare-summary-left strong {
+  display: block;
+  font-size: 13.5px;
+  color: var(--text-main);
+}
+
+.dec-compare-sub {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.dec-compare-body {
+  padding: 14px;
+  border-top: 1px solid var(--border-light);
+}
+
+.dec-compare-dropzone {
+  padding: 16px 12px;
+  min-height: 92px;
+}
+
+.dec-compare-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dec-compare-status-banner.exact {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1.5px solid rgba(16, 185, 129, 0.45);
+  color: #059669;
+}
+
+.dec-compare-status-banner.diff {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1.5px solid rgba(239, 68, 68, 0.45);
+  color: #dc2626;
+}
+
+.dec-compare-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.dec-cmp-metric {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dec-cmp-metric .m-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.dec-cmp-metric .m-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+/* ==========================================================================
+   Dynamic Stage Card Container & Stage 1 Block Size Preset / Apply Controls
+   ========================================================================== */
+.adv-stages-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.adv-s1-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.adv-block-preset-btn {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1.5px solid var(--border-medium);
+  background: var(--bg-card);
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.adv-block-preset-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.adv-block-preset-btn.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #ffffff;
+}
+
+.adv-s1-apply-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+
+.adv-s1-custom-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.adv-block-num-input {
+  width: 74px !important;
+  padding: 5px 8px !important;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+}
+
+
+
 
 
 

@@ -17,7 +17,7 @@
     rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
-  <link rel="stylesheet" href="style.css?v=20261119_3">
+  <link rel="stylesheet" href="style.css?v=20261122_3">
   <script>
     (function () {
       try {
@@ -275,11 +275,32 @@
                 <!-- Live Validation / Experimental Warning Banner -->
                 <div class="adv-validation-banner" id="adv-validation-banner" style="display: none;"></div>
 
+                <!-- Encryption Stage Execution Order (Drag-and-Drop or Up/Down Buttons) -->
+                <div class="adv-order-box" id="adv-stage-order-section">
+                  <div class="adv-order-header">
+                    <div>
+                      <strong class="adv-order-title"><i class="fa-solid fa-arrow-down-short-wide"></i> Encryption Stage Execution Order</strong>
+                      <p class="help-text" style="margin: 2px 0 0 0;">
+                        Choose which stage executes 1st, 2nd, and 3rd using drag-and-drop or the Up / Down buttons. Decryption automatically reverses your chosen order.
+                      </p>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                      <span class="badge-fyp" id="adv-stage-order-badge">Stage 1 → Stage 2 → Stage 3</span>
+                      <button type="button" class="btn btn-xs btn-outline" id="btn-adv-reset-order" title="Reset execution order to default (Stage 1 → Stage 2 → Stage 3)">
+                        <i class="fa-solid fa-rotate-left"></i> Reset to Default Order
+                      </button>
+                    </div>
+                  </div>
+                  <div class="adv-order-list" id="adv-stage-order-list" role="list"></div>
+                </div>
+
+                <!-- Dynamically Reordered Stage Cards Container (Follows Execution Order; Disabled Stages Move to Bottom) -->
+                <div class="adv-stages-container" id="adv-stages-container">
                 <!-- Expandable Card 1: Stage 1 — Keyed Fisher–Yates Pixel Permutation -->
                 <details class="adv-stage-card" id="adv-card-stage1" open>
                   <summary class="adv-stage-summary">
                     <div class="adv-stage-title-wrap">
-                      <span class="adv-stage-num">Stage 1</span>
+                      <span class="adv-stage-num" id="adv-s1-num-badge">1st • Stage 1</span>
                       <strong>Keyed Fisher–Yates Pixel Permutation</strong>
                     </div>
                     <div class="adv-stage-controls-inline" onclick="event.stopPropagation();">
@@ -307,7 +328,7 @@
                         enforced; manual insecure seed entry is disabled.</small>
                     </div>
 
-                    <!-- Customizable Pixel Block Size (1 × 1 to 32 × 32 px) -->
+                    <!-- Customizable Pixel Block Size (1 × 1 to 32 × 32 px — Choose & Apply for Zero Lag) -->
                     <div class="form-group" style="margin-bottom: 12px;">
                       <div class="scope-header-flex" style="margin-bottom: 6px; flex-wrap: wrap; gap: 6px;">
                         <label for="adv-s1-block-slider" style="margin-bottom: 0;"><i
@@ -320,19 +341,33 @@
                           </button>
                         </div>
                       </div>
-                      <input type="range" id="adv-s1-block-slider" class="adv-k-slider" min="1" max="32" step="1"
-                        value="1">
-                      <div class="adv-k-scale-labels">
-                        <span>1×1 (1 px)</span>
-                        <span>3×3 (9 px)</span>
-                        <span>5×5 (25 px)</span>
-                        <span>8×8 (64 px)</span>
-                        <span>16×16 (256 px)</span>
-                        <span>32×32 (1,024 px)</span>
+
+                      <!-- Quick-Select Preset Chips -->
+                      <div class="adv-s1-preset-row" id="adv-s1-preset-row">
+                        <button type="button" class="adv-block-preset-btn active" data-block="1">1×1 px</button>
+                        <button type="button" class="adv-block-preset-btn" data-block="2">2×2 px</button>
+                        <button type="button" class="adv-block-preset-btn" data-block="4">4×4 px</button>
+                        <button type="button" class="adv-block-preset-btn" data-block="8">8×8 px</button>
+                        <button type="button" class="adv-block-preset-btn" data-block="16">16×16 px</button>
+                        <button type="button" class="adv-block-preset-btn" data-block="32">32×32 px</button>
                       </div>
+
+                      <!-- Exact Integer Input (1–32) + Apply to Preview Button -->
+                      <div class="adv-s1-apply-row">
+                        <div class="adv-s1-custom-input-wrap">
+                          <label for="adv-s1-block-slider" style="margin:0; font-size:12px; font-weight:600; white-space:nowrap;">Custom Size (1–32):</label>
+                          <input type="number" id="adv-s1-block-slider" class="form-input adv-block-num-input" min="1" max="32" step="1" value="1">
+                          <span style="font-size:12px; color:var(--text-muted); white-space:nowrap;">× px</span>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-primary" id="btn-adv-s1-apply-block">
+                          <i class="fa-solid fa-check"></i> Apply to Preview
+                        </button>
+                      </div>
+                      <small class="help-text" id="adv-s1-apply-hint" style="display: none; margin-top: 5px; color: #d97706; font-weight: 600;">
+                        <i class="fa-solid fa-circle-info"></i> Block size changed — click <b>Apply to Preview</b> to update the illustrative preview below.
+                      </small>
                       <small class="help-text" style="display: block; margin-top: 6px; color: var(--text-main);">
-                        <i class="fa-solid fa-circle-info"></i> Choose how many pixels move together during shuffling.
-                        Smaller blocks create finer scrambling, while larger blocks produce a mosaic-like effect.
+                        <i class="fa-solid fa-circle-info"></i> Select a preset or type any integer from 1 to 32, then click <b>Apply to Preview</b> to view the effect without lag.
                       </small>
                     </div>
 
@@ -353,7 +388,7 @@
                     <!-- Live Illustrative Stage 1 Image & ROI Preview (Pre-Key Demo) -->
                     <div class="adv-demo-box margin-top" id="adv-s1-live-preview-box">
                       <div class="adv-demo-header" style="flex-wrap: wrap; gap: 6px;">
-                        <span><i class="fa-solid fa-eye"></i> <b>Illustrative Stage 1 Preview (Pre-Key Demo):</b> Live
+                        <span id="adv-s1-preview-title"><i class="fa-solid fa-eye"></i> <b>Illustrative Stage 1 Preview (Pre-Key Demo):</b> Live
                           Block Size &amp; ROI Mask Simulation</span>
                         <span class="adv-stage-badge enabled" id="adv-s1-preview-scope-tag">Scope: Entire Image • 1×1
                           px</span>
@@ -380,7 +415,7 @@
                 <details class="adv-stage-card" id="adv-card-stage2" open>
                   <summary class="adv-stage-summary">
                     <div class="adv-stage-title-wrap">
-                      <span class="adv-stage-num">Stage 2</span>
+                      <span class="adv-stage-num" id="adv-s2-num-badge">2nd • Stage 2</span>
                       <strong>RGB Channel Permutation</strong>
                     </div>
                     <div class="adv-stage-controls-inline" onclick="event.stopPropagation();">
@@ -393,13 +428,13 @@
                   </summary>
                   <div class="adv-stage-body" id="adv-s2-body">
                     <p class="adv-stage-desc">
-                      Customize how the Red, Green, and Blue channels are rearranged during encryption across the symmetric group <i>S</i>₃ (3! = 6 possible channel permutations: <code>RGB, RBG, GRB, GBR, BRG, BGR</code>).
+                      Choose which RGB arrangements KXBIT can use and customize the order in which they are applied across the symmetric group <i>S</i>₃ (<code>RGB, RBG, GRB, GBR, BRG, BGR</code>).
                     </p>
 
-                    <!-- Section: Choose RGB Permutation Mode -->
+                    <!-- Section: Permutation Behavior -->
                     <div class="adv-s2-mode-section">
                       <label style="font-size: 11.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; display: block;">
-                        <i class="fa-solid fa-sliders"></i> Choose RGB Permutation Mode:
+                        <i class="fa-solid fa-sliders"></i> Permutation Behavior:
                       </label>
                       <div class="adv-mode-card-grid">
                         <label class="adv-mode-card active" id="lbl-adv-s2-mode-keyed">
@@ -407,33 +442,33 @@
                           <div class="adv-mode-card-content">
                             <div class="adv-mode-card-header">
                               <strong>Key-Driven Dynamic</strong>
-                              <span class="adv-stage-badge enabled">Recommended</span>
+                              <span class="adv-stage-badge enabled">Default</span>
                             </div>
-                            <p>Use your secret encryption key to dynamically select RGB channel arrangements for each target pixel.</p>
+                            <p>Use your secret encryption key to independently select an RGB arrangement from your allowed set for each pixel.</p>
                           </div>
                         </label>
-                        <label class="adv-mode-card" id="lbl-adv-s2-mode-fixed">
-                          <input type="radio" name="adv-s2-mode-radio" id="adv-s2-mode-fixed" value="fixed">
+                        <label class="adv-mode-card" id="lbl-adv-s2-mode-sequence">
+                          <input type="radio" name="adv-s2-mode-radio" id="adv-s2-mode-sequence" value="sequence">
                           <div class="adv-mode-card-content">
                             <div class="adv-mode-card-header">
-                              <strong>Fixed RGB Order</strong>
-                              <span class="adv-stage-badge experimental">Limited Secrecy</span>
+                              <strong>Custom Keyed Sequence</strong>
+                              <span class="adv-stage-badge experimental">Ordered Cycle</span>
                             </div>
-                            <p>Apply the same selected RGB channel arrangement uniformly across all pixels in the region.</p>
+                            <p>Cycle through your selected RGB arrangements in your exact custom sequence starting from a key-derived offset.</p>
                           </div>
                         </label>
                       </div>
                     </div>
 
-                    <!-- Option A: Key-Driven Dynamic Permutations Subset -->
+                    <!-- Step A: Select RGB Arrangements (Always visible when Stage 2 is enabled) -->
                     <div class="adv-s2-subset-box" id="adv-s2-keyed-group" style="margin-top: 10px;">
                       <div class="scope-header-flex" style="margin-bottom: 6px; flex-wrap: wrap; gap: 6px;">
                         <label style="margin-bottom: 0; font-size: 11.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">
-                          <i class="fa-solid fa-list-check"></i> Allowed Dynamic Permutations (Select 1 to 6):
+                          <i class="fa-solid fa-list-check"></i> Select RGB Arrangements (Select 1 to 6):
                         </label>
                         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                           <span class="badge-fyp" id="adv-s2-allowed-badge">6 of 6 permutations active (full S₃)</span>
-                          <button type="button" class="btn btn-xs btn-outline" id="btn-adv-s2-reset-perms" title="Reset all 6 permutations to default">
+                          <button type="button" class="btn btn-xs btn-outline" id="btn-adv-s2-reset-perms" title="Select all 6 RGB arrangements (Default)">
                             <i class="fa-solid fa-rotate-left"></i> Select All (Default)
                           </button>
                         </div>
@@ -470,56 +505,32 @@
                           <span class="adv-perm-sub">[B, G, R] Reverse</span>
                         </label>
                       </div>
-                      <small class="help-text" style="display: block; margin-top: 6px;">
-                        <i class="fa-solid fa-circle-info"></i> Your encryption key dynamically chooses between the selected permutations for each pixel. Selecting a subset restricts the cipher to only your chosen channel arrangements.
+                      <small class="help-text" style="display: block; margin-top: 6px;" id="adv-s2-mode-help">
+                        <i class="fa-solid fa-circle-info"></i> Your encryption key dynamically chooses between the selected arrangements for each pixel.
                       </small>
                     </div>
 
-                    <!-- Option B: Fixed RGB Order Sub-panel -->
-                    <div class="adv-s2-fixed-panel" id="adv-s2-fixed-group" style="margin-top: 10px; display: none;">
-                      <label style="margin-bottom: 6px; font-size: 11.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; display: block;">
-                        <i class="fa-solid fa-arrow-right-arrow-left"></i> Select Fixed Channel Arrangement:
-                      </label>
-                      <div class="adv-s2-perms-grid">
-                        <label class="adv-perm-chip" id="lbl-adv-s2-fix-0">
-                          <input type="radio" name="adv-s2-fix-choice" id="adv-s2-fix-0" value="0">
-                          <span class="adv-perm-code">RGB</span>
-                          <span class="adv-perm-sub">[R, G, B] Identity</span>
+                    <!-- Step B: Arrange Selected Sequence (Shown ONLY when Custom Keyed Sequence is selected) -->
+                    <div class="adv-s2-seq-panel" id="adv-s2-sequence-group" style="margin-top: 10px; display: none;">
+                      <div class="scope-header-flex" style="margin-bottom: 6px; flex-wrap: wrap; gap: 6px;">
+                        <label style="margin-bottom: 0; font-size: 11.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">
+                          <i class="fa-solid fa-arrow-down-a-z"></i> Arrange Selected Sequence:
                         </label>
-                        <label class="adv-perm-chip active" id="lbl-adv-s2-fix-1">
-                          <input type="radio" name="adv-s2-fix-choice" id="adv-s2-fix-1" value="1" checked>
-                          <span class="adv-perm-code">RBG</span>
-                          <span class="adv-perm-sub">[R, B, G] Swap G↔B</span>
-                        </label>
-                        <label class="adv-perm-chip" id="lbl-adv-s2-fix-2">
-                          <input type="radio" name="adv-s2-fix-choice" id="adv-s2-fix-2" value="2">
-                          <span class="adv-perm-code">GRB</span>
-                          <span class="adv-perm-sub">[G, R, B] Swap R↔G</span>
-                        </label>
-                        <label class="adv-perm-chip" id="lbl-adv-s2-fix-3">
-                          <input type="radio" name="adv-s2-fix-choice" id="adv-s2-fix-3" value="3">
-                          <span class="adv-perm-code">GBR</span>
-                          <span class="adv-perm-sub">[G, B, R] Cycle Left</span>
-                        </label>
-                        <label class="adv-perm-chip" id="lbl-adv-s2-fix-4">
-                          <input type="radio" name="adv-s2-fix-choice" id="adv-s2-fix-4" value="4">
-                          <span class="adv-perm-code">BRG</span>
-                          <span class="adv-perm-sub">[B, R, G] Cycle Right</span>
-                        </label>
-                        <label class="adv-perm-chip" id="lbl-adv-s2-fix-5">
-                          <input type="radio" name="adv-s2-fix-choice" id="adv-s2-fix-5" value="5">
-                          <span class="adv-perm-code">BGR</span>
-                          <span class="adv-perm-sub">[B, G, R] Reverse</span>
-                        </label>
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                          <span class="badge-fyp" id="adv-s2-seq-preview-badge">RGB → RBG → GRB → GBR → BRG → BGR</span>
+                          <button type="button" class="btn btn-xs btn-outline" id="btn-adv-s2-reset-seq" title="Reset sequence order to default">
+                            <i class="fa-solid fa-rotate-left"></i> Reset Sequence
+                          </button>
+                        </div>
                       </div>
+                      <div class="adv-order-list adv-seq-list" id="adv-s2-seq-list" role="list"></div>
                       <div class="alert alert-warning margin-top" style="margin-top: 8px; font-size: 11.5px; padding: 7px 10px;">
-                        <i class="fa-solid fa-triangle-exclamation"></i> <b>Security Notice:</b> Fixed RGB Order applies an identical, deterministic channel permutation uniformly to every pixel without secret key randomness. It is predictable and provides limited secrecy on its own.
+                        <i class="fa-solid fa-triangle-exclamation"></i> <b>Security Note:</b> Custom Keyed Sequence cycles through your ordered list starting at a key-derived offset. A repeating sequence provides much less unpredictability than independent Key-Driven Dynamic selection.
                       </div>
                     </div>
 
-                    <!-- Hidden legacy selects for backwards compatibility / tests -->
-                    <select id="adv-s2-mode" style="display:none;"><option value="keyed" selected>keyed</option><option value="fixed">fixed</option></select>
-                    <select id="adv-s2-fixed-perm" style="display:none;"><option value="0">0</option><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select>
+                    <!-- Hidden legacy select for script state sync -->
+                    <select id="adv-s2-mode" style="display:none;"><option value="keyed" selected>keyed</option><option value="sequence">sequence</option></select>
 
                     <!-- Interactive RGB Channel Permutation Demonstration -->
                     <div class="adv-demo-box" id="adv-s2-visual-box" style="margin-top: 10px;"></div>
@@ -527,7 +538,7 @@
                     <!-- Live Illustrative Stage 2 Image & ROI Preview (Pre-Key Demo) -->
                     <div class="adv-demo-box margin-top" id="adv-s2-live-preview-box">
                       <div class="adv-demo-header" style="flex-wrap: wrap; gap: 6px;">
-                        <span><i class="fa-solid fa-palette"></i> <b>Illustrative Stage 2 Preview (Pre-Key Demo):</b> Cumulative Stage 1 + Stage 2 Channel Rotation</span>
+                        <span id="adv-s2-preview-title"><i class="fa-solid fa-palette"></i> <b>Illustrative Stage 2 Preview (Pre-Key Demo):</b> Cumulative Stage 1 + Stage 2 Channel Rotation</span>
                         <span class="adv-stage-badge enabled" id="adv-s2-preview-scope-tag">Cumulative Stages 1 &amp; 2</span>
                       </div>
                       <p class="help-text" style="margin: 4px 0 8px 0;">
@@ -549,7 +560,7 @@
                 <details class="adv-stage-card" id="adv-card-stage3" open>
                   <summary class="adv-stage-summary">
                     <div class="adv-stage-title-wrap">
-                      <span class="adv-stage-num">Stage 3</span>
+                      <span class="adv-stage-num" id="adv-s3-num-badge">3rd • Stage 3</span>
                       <strong>Configurable <i>k</i>-MSB XOR Encryption</strong>
                     </div>
                     <div class="adv-stage-controls-inline" onclick="event.stopPropagation();">
@@ -624,7 +635,7 @@
                     <!-- Live Illustrative Stage 3 Image & ROI Preview (Pre-Key Demo) -->
                     <div class="adv-demo-box margin-top" id="adv-s3-live-preview-box">
                       <div class="adv-demo-header" style="flex-wrap: wrap; gap: 6px;">
-                        <span><i class="fa-solid fa-eye"></i> <b>Illustrative Stage 3 Preview (Pre-Key Demo):</b> Cumulative Stage 1 + Stage 2 + Stage 3 <i>k</i>-MSB XOR</span>
+                        <span id="adv-s3-preview-title"><i class="fa-solid fa-eye"></i> <b>Illustrative Stage 3 Preview (Pre-Key Demo):</b> Cumulative Stage 1 + Stage 2 + Stage 3 <i>k</i>-MSB XOR</span>
                         <span class="adv-stage-badge enabled" id="adv-s3-preview-scope-tag">Cumulative Stages 1, 2 &amp; 3</span>
                       </div>
                       <p class="help-text" style="margin: 4px 0 8px 0;">
@@ -641,6 +652,7 @@
                     </div>
                   </div>
                 </details>
+                </div>
               </div>
 
               <!-- Optional Mask Privacy Protection Row -->
@@ -1594,28 +1606,34 @@
 
           <!-- Decrypt Preview & Save -->
           <div class="panel glass">
-            <h2 class="panel-title"><i class="fa-solid fa-photo-film"></i> Restored Image Preview & Analysis</h2>
+            <h2 class="panel-title"><i class="fa-solid fa-photo-film"></i> Restored Image Preview</h2>
 
-            <div class="image-comparison-container" id="dec-comparison">
+            <div class="image-comparison-container enc-stacked-comparison" id="dec-comparison">
               <div class="comp-box">
-                <span class="comp-label">Encrypted Input</span>
+                <span class="comp-label"><i class="fa-solid fa-file-shield"></i> Encrypted Input Image</span>
                 <canvas id="canvas-dec-orig"></canvas>
                 <div class="no-image-placeholder" id="ph-dec-orig">
                   <i class="fa-solid fa-file-shield"></i>
                   <p>Upload encrypted image</p>
                 </div>
               </div>
+
+              <div class="dec-stack-arrow" aria-hidden="true">
+                <i class="fa-solid fa-arrow-down"></i>
+                <span>Decrypted Output</span>
+              </div>
+
               <div class="comp-box">
-                <span class="comp-label" id="lbl-dec-result">Restored Result</span>
+                <span class="comp-label" id="lbl-dec-result"><i class="fa-solid fa-image-portrait"></i> Restored Image</span>
                 <canvas id="canvas-dec-result"></canvas>
                 <div class="no-image-placeholder" id="ph-dec-result">
                   <i class="fa-solid fa-image-portrait"></i>
-                  <p>Restored image preview</p>
+                  <p>Restored image will appear here after decryption</p>
                 </div>
               </div>
             </div>
 
-            <!-- Decryption Quality & Metrics Bar -->
+            <!-- Internal Decryption Metrics (Hidden by default; optional user comparison shown below) -->
             <div class="metrics-bar" id="dec-metrics" style="display:none;">
               <div class="metric-item">
                 <span class="m-label">MSE (Mean Squared Error)</span>
@@ -1631,14 +1649,12 @@
               </div>
             </div>
 
-            <!-- Mathematical Involution Verification Card -->
+            <!-- Internal Integrity Verification Card -->
             <div class="fidelity-card" id="dec-fidelity-card" style="display:none;">
               <div class="fidelity-icon"><i class="fa-solid fa-circle-check"></i></div>
               <div class="fidelity-text">
-                <h4 id="dec-fidelity-title">Lossless Involution Verified</h4>
-                <p id="dec-fidelity-desc">Deterministic bit-swap verified. Reversible involution mapping
-                  <code>f(f(x)) = x</code> restored with 100% exact numerical fidelity.
-                </p>
+                <h4 id="dec-fidelity-title">Decryption &amp; Integrity Verified</h4>
+                <p id="dec-fidelity-desc">Cryptographic integrity tag verified and image restored successfully.</p>
               </div>
             </div>
 
@@ -1656,6 +1672,92 @@
                 </button>
               </div>
             </div>
+
+            <!-- Optional Original Image Comparison (Collapsed by Default) -->
+            <details class="dec-compare-details margin-top" id="dec-compare-details">
+              <summary class="dec-compare-summary">
+                <div class="dec-compare-summary-left">
+                  <i class="fa-solid fa-scale-balanced"></i>
+                  <div>
+                    <strong>Compare Restored Image with Original</strong>
+                    <span class="dec-compare-sub">Upload the original image to verify how accurately KXBIT restored your encrypted image.</span>
+                  </div>
+                </div>
+                <span class="badge-fyp">Optional</span>
+              </summary>
+
+              <div class="dec-compare-body">
+                <div class="form-group">
+                  <label for="dec-compare-orig-input"><i class="fa-solid fa-upload"></i> Upload Original Image:</label>
+                  <div class="drop-zone dec-compare-dropzone" id="dec-compare-orig-zone">
+                    <input type="file" id="dec-compare-orig-input" accept="image/png,image/bmp,image/*" class="file-input">
+                    <i class="fa-regular fa-image drop-icon"></i>
+                    <p class="drop-text" id="dec-compare-orig-label">Drag &amp; drop the original reference image here or <span>Browse</span></p>
+                  </div>
+                </div>
+
+                <div class="action-row" style="margin-top: 10px;">
+                  <button type="button" id="btn-dec-compare-images" class="btn btn-primary btn-block" disabled>
+                    <i class="fa-solid fa-magnifying-glass-chart"></i> Compare Images
+                  </button>
+                </div>
+
+                <!-- Dimension Mismatch or Validation Error Banner -->
+                <div class="dec-error-banner margin-top" id="dec-compare-error" style="display:none;">
+                  <i class="fa-solid fa-circle-xmark"></i>
+                  <div>
+                    <strong>Comparison Error</strong>
+                    <p id="dec-compare-error-msg"></p>
+                  </div>
+                </div>
+
+                <!-- Comparison Results Section (Hidden until Compare Images is clicked) -->
+                <div id="dec-compare-results" style="display:none;" class="margin-top">
+                  <div id="dec-compare-status" class="dec-compare-status-banner"></div>
+
+                  <div class="image-comparison-container margin-top" id="dec-compare-canvases">
+                    <div class="comp-box">
+                      <span class="comp-label">Original Image</span>
+                      <canvas id="canvas-dec-cmp-orig"></canvas>
+                    </div>
+                    <div class="comp-box">
+                      <span class="comp-label">Restored Image</span>
+                      <canvas id="canvas-dec-cmp-restored"></canvas>
+                    </div>
+                  </div>
+
+                  <div class="dec-compare-metrics-grid margin-top">
+                    <div class="dec-cmp-metric">
+                      <span class="m-label">Mean Squared Error (MSE)</span>
+                      <span class="m-value" id="val-cmp-mse">0.00</span>
+                    </div>
+                    <div class="dec-cmp-metric">
+                      <span class="m-label">Peak Signal-to-Noise Ratio (PSNR)</span>
+                      <span class="m-value" id="val-cmp-psnr">∞ dB</span>
+                    </div>
+                    <div class="dec-cmp-metric">
+                      <span class="m-label">Total Differing Bits (RGBA XOR)</span>
+                      <span class="m-value" id="val-cmp-bits">0</span>
+                    </div>
+                    <div class="dec-cmp-metric">
+                      <span class="m-label">Differing Pixels</span>
+                      <span class="m-value" id="val-cmp-diff-px">0</span>
+                    </div>
+                    <div class="dec-cmp-metric">
+                      <span class="m-label">Matching Pixels</span>
+                      <span class="m-value" id="val-cmp-match-pct">100.00%</span>
+                    </div>
+                    <div class="dec-cmp-metric">
+                      <span class="m-label">Match Status</span>
+                      <span class="m-value" id="val-cmp-status-short">Exact Match</span>
+                    </div>
+                  </div>
+                  <small class="help-text" style="display:block; margin-top:6px;">
+                    <i class="fa-solid fa-circle-info"></i> Computed across all decoded <b>RGBA channels (R, G, B, A — 32 bits/pixel)</b> without resizing. Total Differing Bits counts every bit where <code>Original ⊕ Restored = 1</code> via XOR population count.
+                  </small>
+                </div>
+              </div>
+            </details>
           </div>
         </div>
       </section>
@@ -2709,8 +2811,8 @@
        Loaded on demand as an ES module from js/app.js, then refined with an edge-aware guided filter. -->
 
   <!-- Core App Scripts -->
-  <script src="js/bit-engine.js?v=20261119_2"></script>
-  <script src="js/app.js?v=20261119_2"></script>
+  <script src="js/bit-engine.js?v=20261122_1"></script>
+  <script src="js/app.js?v=20261122_3"></script>
 </body>
 
 </html>

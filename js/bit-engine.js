@@ -699,6 +699,38 @@ const BitEngine = {
   CHANNEL_PERM_LABELS: ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'],
   CHANNEL_PERM_MAP: { RGB: 0, RBG: 1, GRB: 2, GBR: 3, BRG: 4, BGR: 5 },
 
+  STAGE_ORDERS: [
+    [1, 2, 3], // 0: Default (Stage 1 -> Stage 2 -> Stage 3)
+    [1, 3, 2], // 1: Stage 1 -> Stage 3 -> Stage 2
+    [2, 1, 3], // 2: Stage 2 -> Stage 1 -> Stage 3
+    [2, 3, 1], // 3: Stage 2 -> Stage 3 -> Stage 1
+    [3, 1, 2], // 4: Stage 3 -> Stage 1 -> Stage 2
+    [3, 2, 1]  // 5: Stage 3 -> Stage 2 -> Stage 1
+  ],
+
+  /**
+   * Resolve a stage execution order array or ID into `{ stageOrderId, stageOrder }`.
+   */
+  resolveStageOrder(rawOrder, rawOrderId) {
+    if (typeof rawOrderId === 'number' && rawOrderId >= 0 && rawOrderId <= 5) {
+      const id = rawOrderId | 0;
+      return { stageOrderId: id, stageOrder: this.STAGE_ORDERS[id].slice() };
+    }
+    if (Array.isArray(rawOrder) && rawOrder.length === 3) {
+      const a = rawOrder[0] | 0;
+      const b = rawOrder[1] | 0;
+      const c = rawOrder[2] | 0;
+      for (let i = 0; i < this.STAGE_ORDERS.length; i++) {
+        const o = this.STAGE_ORDERS[i];
+        if (o[0] === a && o[1] === b && o[2] === c) {
+          return { stageOrderId: i, stageOrder: o.slice() };
+        }
+      }
+      throw new Error(`Invalid stage execution order [${rawOrder.join(', ')}]: Must be a permutation of [1, 2, 3].`);
+    }
+    return { stageOrderId: 0, stageOrder: [1, 2, 3] };
+  },
+
   /**
    * Normalize and validate a 3-stage encryption configuration object (Standard or Advanced Mode).
    */
@@ -717,6 +749,8 @@ const BitEngine = {
       throw new Error("Invalid encryption stage configuration: At least one encryption stage (Stage 1, Stage 2, or Stage 3) must be enabled.");
     }
 
+    const { stageOrderId, stageOrder } = this.resolveStageOrder(src.stageOrder, src.stageOrderId);
+
     const stage1BlockSize = (typeof src.stage1BlockSize === 'number') ? (src.stage1BlockSize | 0) : 1;
     if (stage1BlockSize < 1 || stage1BlockSize > 32) {
       throw new Error(`Invalid Stage 1 pixel block size (${stage1BlockSize}): Must be an integer between 1 and 32.`);
@@ -728,7 +762,13 @@ const BitEngine = {
     }
     const stage1AlgoId = stage1BlockSize > 1 ? 1 : 0;
 
-    const stage2Mode = (src.stage2Mode === 'fixed' || src.stage2Mode === 1) ? 'fixed' : 'keyed';
+    let stage2Mode = 'keyed';
+    if (src.stage2Mode === 'fixed' || src.stage2Mode === 1) {
+      stage2Mode = 'fixed';
+    } else if (src.stage2Mode === 'sequence' || src.stage2Mode === 2) {
+      stage2Mode = 'sequence';
+    }
+
     let stage2FixedPermId = 0;
     if (typeof src.stage2FixedPermId === 'number') {
       stage2FixedPermId = src.stage2FixedPermId | 0;
@@ -737,6 +777,26 @@ const BitEngine = {
     }
     if (stage2FixedPermId < 0 || stage2FixedPermId > 5) {
       throw new Error(`Invalid Stage 2 fixed RGB permutation ID (${stage2FixedPermId}): Must be between 0 (RGB) and 5 (BGR).`);
+    }
+
+    // Parse optional custom sequence first (if provided)
+    let parsedSeq = null;
+    if (Array.isArray(src.stage2Sequence) && src.stage2Sequence.length > 0) {
+      const seen = new Set();
+      parsedSeq = [];
+      for (const item of src.stage2Sequence) {
+        let id = -1;
+        if (typeof item === 'number' && item >= 0 && item <= 5) {
+          id = item | 0;
+        } else if (typeof item === 'string' && this.CHANNEL_PERM_MAP[item.trim().toUpperCase()] !== undefined) {
+          id = this.CHANNEL_PERM_MAP[item.trim().toUpperCase()];
+        }
+        if (id >= 0 && id <= 5 && !seen.has(id)) {
+          seen.add(id);
+          parsedSeq.push(id);
+        }
+      }
+      if (parsedSeq.length === 0) parsedSeq = null;
     }
 
     let stage2AllowedMask = 0x3F;
@@ -753,6 +813,10 @@ const BitEngine = {
         }
       }
       stage2AllowedMask = m & 0x3F;
+    } else if (parsedSeq && parsedSeq.length > 0) {
+      let m = 0;
+      for (const id of parsedSeq) m |= (1 << id);
+      stage2AllowedMask = m & 0x3F;
     } else if (src.stage2Allowed && typeof src.stage2Allowed === 'object') {
       let m = 0;
       for (let i = 0; i < 6; i++) {
@@ -764,8 +828,8 @@ const BitEngine = {
       if (m !== 0) stage2AllowedMask = m;
     }
 
-    if (stage2Enabled && stage2Mode === 'keyed' && stage2AllowedMask === 0) {
-      throw new Error("Invalid Stage 2 configuration: At least one RGB channel permutation must be selected when Stage 2 is in Key-Driven mode.");
+    if (stage2Enabled && (stage2Mode === 'keyed' || stage2Mode === 'sequence') && stage2AllowedMask === 0) {
+      throw new Error("Invalid Stage 2 configuration: At least one RGB channel permutation must be selected when Stage 2 is enabled.");
     }
     if (stage2AllowedMask === 0) {
       stage2AllowedMask = 0x3F;
@@ -780,6 +844,22 @@ const BitEngine = {
       }
     }
     const stage2AllowedCount = stage2AllowedIds.length;
+
+    // Build validated stage2Sequence restricted to stage2AllowedIds
+    let stage2Sequence = [];
+    if (parsedSeq && parsedSeq.length > 0) {
+      for (const id of parsedSeq) {
+        if ((stage2AllowedMask & (1 << id)) !== 0) {
+          stage2Sequence.push(id);
+        }
+      }
+      for (const id of stage2AllowedIds) {
+        if (!stage2Sequence.includes(id)) stage2Sequence.push(id);
+      }
+    } else {
+      stage2Sequence = stage2AllowedIds.slice();
+    }
+    const stage2SequenceLabels = stage2Sequence.map(id => this.CHANNEL_PERM_LABELS[id]);
 
     let channelMask = 0x07;
     if (typeof src.channelMask === 'number') {
@@ -804,6 +884,7 @@ const BitEngine = {
     };
 
     const isStandardDefault = (
+      stageOrderId === 0 &&
       stage1Enabled &&
       stage1BlockSize === 1 &&
       stage2Enabled &&
@@ -812,6 +893,8 @@ const BitEngine = {
       stage3Enabled &&
       channelMask === 0x07
     );
+
+    const hasExtendedStageConfig = (stageOrderId !== 0 || stage2Mode === 'sequence');
 
     const encryptionMode = (src.encryptionMode === 'advanced' || !isStandardDefault)
       ? 'advanced'
@@ -826,27 +909,38 @@ const BitEngine = {
 
     const fwdParts = [];
     const revParts = [];
-    if (stage1Enabled) {
-      const s1Desc = stage1BlockSize > 1 ? `Fisher–Yates ${stage1BlockSize}×${stage1BlockSize} Block` : 'Fisher–Yates 1×1';
-      fwdParts.push(`Stage 1 (${s1Desc})`);
-      revParts.unshift(`Reverse Stage 1 (${s1Desc})`);
+    for (const sNum of stageOrder) {
+      if (sNum === 1 && stage1Enabled) {
+        const s1Desc = stage1BlockSize > 1 ? `Fisher–Yates ${stage1BlockSize}×${stage1BlockSize} Block` : 'Fisher–Yates 1×1';
+        fwdParts.push(`Stage 1 (${s1Desc})`);
+        revParts.unshift(`Reverse Stage 1 (${s1Desc})`);
+      } else if (sNum === 2 && stage2Enabled) {
+        let s2Desc;
+        if (stage2Mode === 'fixed') {
+          s2Desc = `Fixed ${fixedPermLabel}`;
+        } else if (stage2Mode === 'sequence') {
+          s2Desc = `Keyed Sequence [${stage2SequenceLabels.join('→')}]`;
+        } else {
+          s2Desc = stage2AllowedCount === 6 ? 'Keyed RGB' : `Keyed RGB [${stage2AllowedLabels.join(',')}]`;
+        }
+        fwdParts.push(`Stage 2 (${s2Desc})`);
+        revParts.unshift(`Reverse Stage 2 (${s2Desc})`);
+      } else if (sNum === 3 && stage3Enabled) {
+        fwdParts.push(`Stage 3 (k=${kVal} XOR on ${chList.join('+')})`);
+        revParts.unshift(`Reverse Stage 3 (k=${kVal} XOR on ${chList.join('+')})`);
+      }
     }
-    if (stage2Enabled) {
-      const s2Desc = stage2Mode === 'fixed'
-        ? `Fixed ${fixedPermLabel}`
-        : (stage2AllowedCount === 6 ? 'Keyed RGB' : `Keyed RGB [${stage2AllowedLabels.join(',')}]`);
-      fwdParts.push(`Stage 2 (${s2Desc})`);
-      revParts.unshift(`Reverse Stage 2 (${s2Desc})`);
-    }
-    if (stage3Enabled) {
-      fwdParts.push(`Stage 3 (k=${kVal} XOR on ${chList.join('+')})`);
-      revParts.unshift(`Reverse Stage 3 (k=${kVal} XOR on ${chList.join('+')})`);
-    }
+
+    const stageOrderLabel = stageOrder.map(s => `Stage ${s}`).join(' → ');
 
     return {
       encryptionMode,
       isStandardDefault,
       isExperimental: !isStandardDefault,
+      hasExtendedStageConfig,
+      stageOrderId,
+      stageOrder,
+      stageOrderLabel,
       stage1Enabled,
       stage1AlgoId,
       stage1BlockSize,
@@ -862,6 +956,8 @@ const BitEngine = {
       stage2AllowedIds,
       stage2AllowedLabels,
       stage2AllowedCount,
+      stage2Sequence,
+      stage2SequenceLabels,
       stage3Enabled,
       k: kVal,
       stage3Channels,
@@ -874,10 +970,104 @@ const BitEngine = {
   },
 
   /**
+   * Pack extended stage settings (Custom Stage Execution Order + Stage 2 Custom Keyed Sequence)
+   * into a compact byte array (1 to 4 bytes):
+   * - Byte 0: [7:5] stageOrderId (0..5) | [4:3] stage2BehaviorExt (0=standard, 1=sequence) | [2:0] seqLen (0 or 1..6)
+   * - Bytes 1..N (when stage2BehaviorExt === 1): packed 3-bit permutation indices (LSB-first).
+   */
+  encodeExtendedStageConfigBytes(rawConfig, fallbackK = 2) {
+    const cfg = this.normalizeStageConfig(rawConfig, fallbackK);
+    const isSeq = cfg.stage2Mode === 'sequence';
+    const seq = isSeq ? cfg.stage2Sequence : [];
+    const seqLen = isSeq ? seq.length : 0;
+    const ext0 = ((cfg.stageOrderId & 0x07) << 5)
+               | ((isSeq ? 1 : 0) << 3)
+               | (seqLen & 0x07);
+    if (!isSeq || seqLen === 0) {
+      return new Uint8Array([ext0 & 0xFF]);
+    }
+    const seqByteLen = Math.ceil((seqLen * 3) / 8);
+    const out = new Uint8Array(1 + seqByteLen);
+    out[0] = ext0 & 0xFF;
+    let bitAcc = 0;
+    let bitCount = 0;
+    let bytePos = 1;
+    for (let i = 0; i < seqLen; i++) {
+      bitAcc |= ((seq[i] & 0x07) << bitCount);
+      bitCount += 3;
+      while (bitCount >= 8) {
+        out[bytePos++] = bitAcc & 0xFF;
+        bitAcc >>>= 8;
+        bitCount -= 8;
+      }
+    }
+    if (bitCount > 0 && bytePos < out.length) {
+      out[bytePos] = bitAcc & 0xFF;
+    }
+    return out;
+  },
+
+  /**
+   * Decode compact extended stage settings starting at `bytes[offset]`.
+   */
+  decodeExtendedStageConfigBytes(bytes, offset) {
+    if (offset >= bytes.byteLength) {
+      throw new Error("Truncated extended stage configuration in v2 msBX chunk.");
+    }
+    const ext0 = bytes[offset];
+    const stageOrderId = (ext0 >>> 5) & 0x07;
+    const stage2BehaviorExt = (ext0 >>> 3) & 0x03;
+    const seqLen = ext0 & 0x07;
+    if (stageOrderId > 5) {
+      throw new Error(`Invalid stage execution order ID (${stageOrderId}) in msBX metadata.`);
+    }
+    if (stage2BehaviorExt > 1) {
+      throw new Error(`Unsupported Stage 2 extended behavior (${stage2BehaviorExt}) in msBX metadata.`);
+    }
+    let pos = offset + 1;
+    let stage2Sequence = null;
+    if (stage2BehaviorExt === 1) {
+      if (seqLen < 1 || seqLen > 6) {
+        throw new Error(`Invalid Stage 2 custom sequence length (${seqLen}) in msBX metadata.`);
+      }
+      const seqByteLen = Math.ceil((seqLen * 3) / 8);
+      if (pos + seqByteLen > bytes.byteLength) {
+        throw new Error("Truncated Stage 2 custom sequence bytes in v2 msBX chunk.");
+      }
+      stage2Sequence = [];
+      let bitAcc = 0;
+      let bitCount = 0;
+      let bIdx = 0;
+      for (let i = 0; i < seqLen; i++) {
+        while (bitCount < 3 && bIdx < seqByteLen) {
+          bitAcc |= (bytes[pos + bIdx] << bitCount);
+          bitCount += 8;
+          bIdx++;
+        }
+        const permId = bitAcc & 0x07;
+        bitAcc >>>= 3;
+        bitCount -= 3;
+        if (permId > 5) {
+          throw new Error(`Invalid RGB permutation ID (${permId}) in Stage 2 sequence metadata.`);
+        }
+        stage2Sequence.push(permId);
+      }
+      pos += seqByteLen;
+    }
+    return {
+      stageOrderId,
+      stage2IsSequence: stage2BehaviorExt === 1,
+      stage2Sequence,
+      byteLength: pos - offset,
+      nextOffset: pos
+    };
+  },
+
+  /**
    * Pack a normalized Stage Configuration into 2 or 3 compact bytes `[stageByte0, stageByte1 (, stageByte2)]`:
    * - stageByte0: [7] isAdvanced (1b) | [6] stage1 (1b) | [5] stage2 (1b) | [4] stage3 (1b) | [3] stage2Fixed (1b) | [2:0] fixedPermId or 0x07 for custom dynamic subset
    * - stageByte1: [7:3] stage1BlockSize - 1 (5b, 0..31 => 1×1..32×32 px) | [2] Red (1b) | [1] Green (1b) | [0] Blue (1b)
-   * - stageByte2 (optional, when stage2Mode='keyed' and stage2AllowedMask != 0x3F): [5:0] 6-bit allowed permutation mask
+   * - stageByte2 (optional, when stage2Mode!='fixed' and stage2AllowedMask != 0x3F): [5:0] 6-bit allowed permutation mask
    */
   encodeStageConfigBytes(rawConfig, fallbackK = 2) {
     const cfg = this.normalizeStageConfig(rawConfig, fallbackK);
@@ -903,9 +1093,10 @@ const BitEngine = {
   },
 
   /**
-   * Decode bit-packed `[stageByte0, stageByte1 (, stageByte2)]` from `msBX` metadata into a validated Stage Configuration.
+   * Decode bit-packed `[stageByte0, stageByte1 (, stageByte2)]` (+ optional extended stage block)
+   * from `msBX` metadata into a validated Stage Configuration.
    */
-  decodeStageConfigBytes(byte0, byte1, k = 2, byte2 = 0x3F) {
+  decodeStageConfigBytes(byte0, byte1, k = 2, byte2 = 0x3F, extStage = null) {
     const isAdv = ((byte0 >>> 7) & 0x01) === 1;
     const stage1Enabled = ((byte0 >>> 6) & 0x01) === 1;
     const stage2Enabled = ((byte0 >>> 5) & 0x01) === 1;
@@ -921,14 +1112,30 @@ const BitEngine = {
     const stage1BlockSize = ((byte1 >>> 3) & 0x1F) + 1;
     const channelMask = byte1 & 0x07;
 
+    let stage2Mode = stage2Fixed ? 'fixed' : 'keyed';
+    let stageOrderId = 0;
+    let stage2Sequence = null;
+    if (extStage && typeof extStage === 'object') {
+      if (typeof extStage.stageOrderId === 'number') stageOrderId = extStage.stageOrderId;
+      if (extStage.stage2IsSequence && Array.isArray(extStage.stage2Sequence) && extStage.stage2Sequence.length > 0) {
+        stage2Mode = 'sequence';
+        stage2Sequence = extStage.stage2Sequence;
+        let m = 0;
+        for (const id of stage2Sequence) m |= (1 << id);
+        stage2AllowedMask = m & 0x3F;
+      }
+    }
+
     return this.normalizeStageConfig({
       encryptionMode: isAdv ? 'advanced' : 'standard',
+      stageOrderId,
       stage1Enabled,
       stage1BlockSize,
       stage2Enabled,
-      stage2Mode: stage2Fixed ? 'fixed' : 'keyed',
+      stage2Mode,
       stage2FixedPermId,
       stage2AllowedMask,
+      stage2Sequence,
       stage3Enabled,
       k,
       channelMask
@@ -1503,107 +1710,238 @@ const BitEngine = {
   },
 
   /**
-   * Illustrative pre-key preview generator for Stage 2 (and preceding Stage 1).
-   * Demonstrates how RGB channel permutation rearranges color components across
-   * the active ROI and selected allowed permutation subset / fixed order.
+   * Internal stage helpers (bijections on `targetIndices`, leaving non-ROI pixels and Alpha unchanged).
    */
-  previewStage2ChannelPermutation(imageData, maskOrRegions = null, stageConfig = null) {
-    const cfg = this.normalizeStageConfig(stageConfig);
-    const W = imageData.width;
-    const H = imageData.height;
-    const targetIndices = this.getTargetPixelIndices(imageData, maskOrRegions);
+  _applyStage1(srcData, W, H, targetIndices, blockSize, prngPixel, inverse = false) {
     const M = targetIndices.length;
-
-    let intermediateData;
-    if (cfg.stage1Enabled) {
-      const s1Res = this.previewStage1BlockPermutation(imageData, maskOrRegions, cfg.stage1BlockSize);
-      intermediateData = s1Res.previewImageData.data;
-    } else {
-      intermediateData = new Uint8ClampedArray(imageData.data);
-    }
-
-    const out = new Uint8ClampedArray(intermediateData);
-    if (cfg.stage2Enabled && M > 0) {
-      const isFixed = cfg.stage2Mode === 'fixed';
-      const allowedIds = (cfg.stage2AllowedIds && cfg.stage2AllowedIds.length > 0)
-        ? cfg.stage2AllowedIds
-        : [0, 1, 2, 3, 4, 5];
-      const allowedCount = allowedIds.length;
-
-      const demoSeed = new Uint32Array([0x4B584254, 0x53544732, (allowedCount * 0x9E3779B9) >>> 0, (M * 0x85EBCA6B) >>> 0]);
-      const demoPrng = this.getFramePRNG(demoSeed, 2, 1);
-
-      for (let idx = 0; idx < M; idx++) {
-        const pixelIdx = targetIndices[idx] * 4;
-        const r = intermediateData[pixelIdx];
-        const g = intermediateData[pixelIdx + 1];
-        const b = intermediateData[pixelIdx + 2];
-        const rgb = [r, g, b];
-
-        const permIdx = isFixed ? cfg.stage2FixedPermId : allowedIds[demoPrng.nextInt(allowedCount)];
-        const pOrder = this.CHANNEL_PERMS[permIdx];
-
-        out[pixelIdx] = rgb[pOrder[0]];
-        out[pixelIdx + 1] = rgb[pOrder[1]];
-        out[pixelIdx + 2] = rgb[pOrder[2]];
+    const out = new Uint8ClampedArray(srcData);
+    if (M <= 1) return out;
+    const B = Math.max(1, Math.min(32, blockSize | 0));
+    if (B <= 1) {
+      const perm = new Int32Array(M);
+      for (let i = 0; i < M; i++) perm[i] = i;
+      for (let i = M - 1; i > 0; i--) {
+        const j = prngPixel.nextInt(i + 1);
+        const temp = perm[i];
+        perm[i] = perm[j];
+        perm[j] = temp;
       }
+      for (let idx = 0; idx < M; idx++) {
+        const srcIdx = targetIndices[inverse ? perm[idx] : idx] * 4;
+        const dstIdx = targetIndices[inverse ? idx : perm[idx]] * 4;
+        out[dstIdx] = srcData[srcIdx];
+        out[dstIdx + 1] = srcData[srcIdx + 1];
+        out[dstIdx + 2] = srcData[srcIdx + 2];
+        out[dstIdx + 3] = srcData[srcIdx + 3];
+      }
+      return out;
     }
 
-    return {
-      previewImageData: new ImageData(out, W, H),
-      config: cfg
-    };
-  },
-
-  /**
-   * Illustrative pre-key preview generator for Stage 3 (cumulative Stage 1 + Stage 2 + Stage 3 k-MSB XOR).
-   * Demonstrates the combined visual effect across the active ROI without using any real secret key.
-   */
-  previewStage3MsbXor(imageData, maskOrRegions = null, stageConfig = null) {
-    const cfg = this.normalizeStageConfig(stageConfig);
-    const W = imageData.width;
-    const H = imageData.height;
-    const kk = cfg.k;
-    const targetIndices = this.getTargetPixelIndices(imageData, maskOrRegions);
-    const M = targetIndices.length;
-
-    const s2Res = this.previewStage2ChannelPermutation(imageData, maskOrRegions, cfg);
-    const out = new Uint8ClampedArray(s2Res.previewImageData.data);
-
-    if (cfg.stage3Enabled && M > 0) {
-      const activeCh = [
-        !!cfg.stage3Channels.r,
-        !!cfg.stage3Channels.g,
-        !!cfg.stage3Channels.b
-      ];
-      const demoSeed = new Uint32Array([0x4B584254, 0x53544733, (kk * 0x9E3779B9) >>> 0, (M * 0x85EBCA6B) >>> 0]);
-      const demoPrng = this.getFramePRNG(demoSeed, kk, 2);
-
-      for (let idx = 0; idx < M; idx++) {
-        const pixelIdx = targetIndices[idx] * 4;
-        for (let c = 0; c < 3; c++) {
-          if (activeCh[c]) {
-            const cIdx = pixelIdx + c;
-            const keyBits = kk === 2 ? demoPrng.next2Bits() : demoPrng.nextKBits(kk);
-            out[cIdx] = kk === 2 ? this.xor2MSB(out[cIdx], keyBits) : this.xorKMSB(out[cIdx], keyBits, kk);
+    const part = this.partitionMaskAwareBlocks(W, H, targetIndices, B);
+    const K = part.eligibleBlocks.length;
+    if (K >= 2) {
+      const blockPerm = new Int32Array(K);
+      for (let i = 0; i < K; i++) blockPerm[i] = i;
+      for (let i = K - 1; i > 0; i--) {
+        const j = prngPixel.nextInt(i + 1);
+        const temp = blockPerm[i];
+        blockPerm[i] = blockPerm[j];
+        blockPerm[j] = temp;
+      }
+      for (let bIdx = 0; bIdx < K; bIdx++) {
+        const srcTop = part.eligibleBlocks[inverse ? blockPerm[bIdx] : bIdx];
+        const dstTop = part.eligibleBlocks[inverse ? bIdx : blockPerm[bIdx]];
+        for (let dy = 0; dy < B; dy++) {
+          const sRow = srcTop + dy * W;
+          const dRow = dstTop + dy * W;
+          for (let dx = 0; dx < B; dx++) {
+            const srcIdx = (sRow + dx) * 4;
+            const dstIdx = (dRow + dx) * 4;
+            out[dstIdx] = srcData[srcIdx];
+            out[dstIdx + 1] = srcData[srcIdx + 1];
+            out[dstIdx + 2] = srcData[srcIdx + 2];
+            out[dstIdx + 3] = srcData[srcIdx + 3];
           }
         }
       }
     }
 
+    const L = part.boundaryIndices.length;
+    if (L >= 2) {
+      const boundPerm = new Int32Array(L);
+      for (let i = 0; i < L; i++) boundPerm[i] = i;
+      for (let i = L - 1; i > 0; i--) {
+        const j = prngPixel.nextInt(i + 1);
+        const temp = boundPerm[i];
+        boundPerm[i] = boundPerm[j];
+        boundPerm[j] = temp;
+      }
+      for (let i = 0; i < L; i++) {
+        const srcIdx = part.boundaryIndices[inverse ? boundPerm[i] : i] * 4;
+        const dstIdx = part.boundaryIndices[inverse ? i : boundPerm[i]] * 4;
+        out[dstIdx] = srcData[srcIdx];
+        out[dstIdx + 1] = srcData[srcIdx + 1];
+        out[dstIdx + 2] = srcData[srcIdx + 2];
+        out[dstIdx + 3] = srcData[srcIdx + 3];
+      }
+    }
+    return out;
+  },
+
+  _applyStage2(srcData, targetIndices, cfg, prngChannel, inverse = false) {
+    const M = targetIndices.length;
+    const out = new Uint8ClampedArray(srcData);
+    if (M === 0) return out;
+    const table = inverse ? this.INV_CHANNEL_PERMS : this.CHANNEL_PERMS;
+
+    if (cfg.stage2Mode === 'fixed') {
+      const pOrder = table[cfg.stage2FixedPermId] || table[0];
+      for (let idx = 0; idx < M; idx++) {
+        const pixelIdx = targetIndices[idx] * 4;
+        const r = srcData[pixelIdx];
+        const g = srcData[pixelIdx + 1];
+        const b = srcData[pixelIdx + 2];
+        const rgb = [r, g, b];
+        out[pixelIdx] = rgb[pOrder[0]];
+        out[pixelIdx + 1] = rgb[pOrder[1]];
+        out[pixelIdx + 2] = rgb[pOrder[2]];
+      }
+    } else if (cfg.stage2Mode === 'sequence') {
+      const seq = (cfg.stage2Sequence && cfg.stage2Sequence.length > 0)
+        ? cfg.stage2Sequence
+        : [0, 1, 2, 3, 4, 5];
+      const seqLen = seq.length;
+      const startOffset = seqLen > 1 ? prngChannel.nextInt(seqLen) : 0;
+      for (let idx = 0; idx < M; idx++) {
+        const pixelIdx = targetIndices[idx] * 4;
+        const r = srcData[pixelIdx];
+        const g = srcData[pixelIdx + 1];
+        const b = srcData[pixelIdx + 2];
+        const rgb = [r, g, b];
+        const permIdx = seq[(startOffset + idx) % seqLen];
+        const pOrder = table[permIdx];
+        out[pixelIdx] = rgb[pOrder[0]];
+        out[pixelIdx + 1] = rgb[pOrder[1]];
+        out[pixelIdx + 2] = rgb[pOrder[2]];
+      }
+    } else {
+      const allowedIds = (cfg.stage2AllowedIds && cfg.stage2AllowedIds.length > 0)
+        ? cfg.stage2AllowedIds
+        : [0, 1, 2, 3, 4, 5];
+      const allowedCount = allowedIds.length;
+      for (let idx = 0; idx < M; idx++) {
+        const pixelIdx = targetIndices[idx] * 4;
+        const r = srcData[pixelIdx];
+        const g = srcData[pixelIdx + 1];
+        const b = srcData[pixelIdx + 2];
+        const rgb = [r, g, b];
+        const permIdx = allowedIds[prngChannel.nextInt(allowedCount)];
+        const pOrder = table[permIdx];
+        out[pixelIdx] = rgb[pOrder[0]];
+        out[pixelIdx + 1] = rgb[pOrder[1]];
+        out[pixelIdx + 2] = rgb[pOrder[2]];
+      }
+    }
+    return out;
+  },
+
+  _applyStage3(srcData, targetIndices, cfg, prngXor) {
+    const M = targetIndices.length;
+    const out = new Uint8ClampedArray(srcData);
+    if (M === 0) return out;
+    const kk = cfg.k;
+    const activeCh = [
+      !!cfg.stage3Channels.r,
+      !!cfg.stage3Channels.g,
+      !!cfg.stage3Channels.b
+    ];
+    for (let idx = 0; idx < M; idx++) {
+      const pixelIdx = targetIndices[idx] * 4;
+      for (let c = 0; c < 3; c++) {
+        if (activeCh[c]) {
+          const cIdx = pixelIdx + c;
+          const keyBits = kk === 2 ? prngXor.next2Bits() : prngXor.nextKBits(kk);
+          out[cIdx] = kk === 2 ? this.xor2MSB(srcData[cIdx], keyBits) : this.xorKMSB(srcData[cIdx], keyBits, kk);
+        }
+      }
+    }
+    return out;
+  },
+
+  /**
+   * Illustrative pre-key preview generator that executes the configured stages
+   * in the user's selected `stageOrder` up to `upToStepIndex` (0, 1, or 2).
+   * Uses deterministic demo seeds (never any secret key).
+   */
+  previewPipelineStep(imageData, maskOrRegions = null, stageConfig = null, upToStepIndex = 2) {
+    const cfg = this.normalizeStageConfig(stageConfig);
+    const W = imageData.width;
+    const H = imageData.height;
+    const targetIndices = this.getTargetPixelIndices(imageData, maskOrRegions);
+    const M = targetIndices.length;
+    const maxIdx = Math.max(0, Math.min(2, upToStepIndex | 0));
+
+    let cur = new Uint8ClampedArray(imageData.data);
+    const executedStages = [];
+
+    for (let step = 0; step <= maxIdx; step++) {
+      const sNum = cfg.stageOrder[step];
+      if (sNum === 1 && cfg.stage1Enabled && M > 1) {
+        const B = cfg.stage1BlockSize;
+        const demoSeed1 = new Uint32Array([0x4B584254, 0x53544731, (B * 0x9E3779B9) >>> 0, (M * 0x85EBCA6B) >>> 0]);
+        const demoPrng1 = this.getFramePRNG(demoSeed1, B, 1);
+        cur = this._applyStage1(cur, W, H, targetIndices, B, demoPrng1, false);
+        executedStages.push(1);
+      } else if (sNum === 2 && cfg.stage2Enabled && M > 0) {
+        const seedSalt = cfg.stage2Mode === 'sequence'
+          ? (cfg.stage2Sequence.reduce((acc, v, idx) => (acc * 7 + v + idx + 1) >>> 0, 17))
+          : cfg.stage2AllowedCount;
+        const demoSeed2 = new Uint32Array([0x4B584254, 0x53544732, (seedSalt * 0x9E3779B9) >>> 0, (M * 0x85EBCA6B) >>> 0]);
+        const demoPrng2 = this.getFramePRNG(demoSeed2, 2, 1);
+        cur = this._applyStage2(cur, targetIndices, cfg, demoPrng2, false);
+        executedStages.push(2);
+      } else if (sNum === 3 && cfg.stage3Enabled && M > 0) {
+        const kk = cfg.k;
+        const demoSeed3 = new Uint32Array([0x4B584254, 0x53544733, (kk * 0x9E3779B9) >>> 0, (M * 0x85EBCA6B) >>> 0]);
+        const demoPrng3 = this.getFramePRNG(demoSeed3, kk, 2);
+        cur = this._applyStage3(cur, targetIndices, cfg, demoPrng3);
+        executedStages.push(3);
+      }
+    }
+
+    const partition = this.partitionMaskAwareBlocks(W, H, targetIndices, cfg.stage1BlockSize);
     return {
-      previewImageData: new ImageData(out, W, H),
-      config: cfg
+      previewImageData: new ImageData(cur, W, H),
+      config: cfg,
+      executedStages,
+      partition
     };
   },
 
   /**
+   * Illustrative pre-key preview generator for Stage 2 (respects selected stage execution order).
+   */
+  previewStage2ChannelPermutation(imageData, maskOrRegions = null, stageConfig = null) {
+    const cfg = this.normalizeStageConfig(stageConfig);
+    const stepIdx = cfg.stageOrder.indexOf(2);
+    return this.previewPipelineStep(imageData, maskOrRegions, cfg, stepIdx >= 0 ? stepIdx : 1);
+  },
+
+  /**
+   * Illustrative pre-key preview generator for Stage 3 (respects selected stage execution order).
+   */
+  previewStage3MsbXor(imageData, maskOrRegions = null, stageConfig = null) {
+    const cfg = this.normalizeStageConfig(stageConfig);
+    const stepIdx = cfg.stageOrder.indexOf(3);
+    return this.previewPipelineStep(imageData, maskOrRegions, cfg, stepIdx >= 0 ? stepIdx : 2);
+  },
+
+  /**
    * Core 3-Stage Encryption with explicit PRNG streams, configurable k (1..8, default 2),
-   * and customizable stage configuration (Standard Mode vs. Advanced Mode).
+   * customizable stage configuration, and customizable stage execution order (all 6 permutations of S1, S2, S3).
    */
   _encryptWithStreams(imageData, prngPixel, prngChannel, prngXor, maskOrRegions = null, kVal = 2, stageConfig = null) {
     const cfg = this.normalizeStageConfig(stageConfig, kVal);
-    const kk = cfg.k;
     const W = imageData.width;
     const H = imageData.height;
     const data = imageData.data;
@@ -1615,114 +1953,19 @@ const BitEngine = {
       return { imageData, swappedCount: 0, mse: 0, psnr: '∞', stageConfig: cfg };
     }
 
-    // === STAGE 1: PIXEL PERMUTATION (Keyed Fisher–Yates 1×1 or Mask-Aware B×B Block Shuffle) ===
-    const stage1Data = new Uint8ClampedArray(data);
-    if (cfg.stage1Enabled) {
-      const B = cfg.stage1BlockSize;
-      if (B <= 1) {
-        const perm = new Int32Array(M);
-        for (let i = 0; i < M; i++) perm[i] = i;
-        for (let i = M - 1; i > 0; i--) {
-          const j = prngPixel.nextInt(i + 1);
-          const temp = perm[i];
-          perm[i] = perm[j];
-          perm[j] = temp;
-        }
-
-        for (let idx = 0; idx < M; idx++) {
-          const srcIdx = targetIndices[idx] * 4;
-          const dstIdx = targetIndices[perm[idx]] * 4;
-          stage1Data[dstIdx] = data[srcIdx];
-          stage1Data[dstIdx + 1] = data[srcIdx + 1];
-          stage1Data[dstIdx + 2] = data[srcIdx + 2];
-          stage1Data[dstIdx + 3] = data[srcIdx + 3];
-        }
-      } else {
-        const part = this.partitionMaskAwareBlocks(W, H, targetIndices, B);
-        const K = part.eligibleBlocks.length;
-        if (K >= 2) {
-          const blockPerm = new Int32Array(K);
-          for (let i = 0; i < K; i++) blockPerm[i] = i;
-          for (let i = K - 1; i > 0; i--) {
-            const j = prngPixel.nextInt(i + 1);
-            const temp = blockPerm[i];
-            blockPerm[i] = blockPerm[j];
-            blockPerm[j] = temp;
-          }
-
-          for (let bIdx = 0; bIdx < K; bIdx++) {
-            const srcTop = part.eligibleBlocks[bIdx];
-            const dstTop = part.eligibleBlocks[blockPerm[bIdx]];
-            for (let dy = 0; dy < B; dy++) {
-              const sRow = srcTop + dy * W;
-              const dRow = dstTop + dy * W;
-              for (let dx = 0; dx < B; dx++) {
-                const srcIdx = (sRow + dx) * 4;
-                const dstIdx = (dRow + dx) * 4;
-                stage1Data[dstIdx] = data[srcIdx];
-                stage1Data[dstIdx + 1] = data[srcIdx + 1];
-                stage1Data[dstIdx + 2] = data[srcIdx + 2];
-                stage1Data[dstIdx + 3] = data[srcIdx + 3];
-              }
-            }
-          }
-        }
-
-        const L = part.boundaryIndices.length;
-        if (L >= 2) {
-          const boundPerm = new Int32Array(L);
-          for (let i = 0; i < L; i++) boundPerm[i] = i;
-          for (let i = L - 1; i > 0; i--) {
-            const j = prngPixel.nextInt(i + 1);
-            const temp = boundPerm[i];
-            boundPerm[i] = boundPerm[j];
-            boundPerm[j] = temp;
-          }
-
-          for (let i = 0; i < L; i++) {
-            const srcIdx = part.boundaryIndices[i] * 4;
-            const dstIdx = part.boundaryIndices[boundPerm[i]] * 4;
-            stage1Data[dstIdx] = data[srcIdx];
-            stage1Data[dstIdx + 1] = data[srcIdx + 1];
-            stage1Data[dstIdx + 2] = data[srcIdx + 2];
-            stage1Data[dstIdx + 3] = data[srcIdx + 3];
-          }
-        }
+    let currentData = new Uint8ClampedArray(data);
+    for (const stageNum of cfg.stageOrder) {
+      if (stageNum === 1 && cfg.stage1Enabled) {
+        currentData = this._applyStage1(currentData, W, H, targetIndices, cfg.stage1BlockSize, prngPixel, false);
+      } else if (stageNum === 2 && cfg.stage2Enabled) {
+        currentData = this._applyStage2(currentData, targetIndices, cfg, prngChannel, false);
+      } else if (stageNum === 3 && cfg.stage3Enabled) {
+        currentData = this._applyStage3(currentData, targetIndices, cfg, prngXor);
       }
     }
 
-    // === STAGE 2: RGB CHANNEL PERMUTATION (Key-Driven Dynamic or Fixed) ===
-    const stage2Data = new Uint8ClampedArray(stage1Data);
-    if (cfg.stage2Enabled) {
-      const isFixedPerm = cfg.stage2Mode === 'fixed';
-      const allowedIds = (cfg.stage2AllowedIds && cfg.stage2AllowedIds.length > 0)
-        ? cfg.stage2AllowedIds
-        : [0, 1, 2, 3, 4, 5];
-      const allowedCount = allowedIds.length;
-      for (let idx = 0; idx < M; idx++) {
-        const pixelIdx = targetIndices[idx] * 4;
-        const r = stage1Data[pixelIdx];
-        const g = stage1Data[pixelIdx + 1];
-        const b = stage1Data[pixelIdx + 2];
-        const rgb = [r, g, b];
+    data.set(currentData);
 
-        const permIdx = isFixedPerm
-          ? cfg.stage2FixedPermId
-          : allowedIds[prngChannel.nextInt(allowedCount)];
-        const pOrder = this.CHANNEL_PERMS[permIdx];
-
-        stage2Data[pixelIdx] = rgb[pOrder[0]];
-        stage2Data[pixelIdx + 1] = rgb[pOrder[1]];
-        stage2Data[pixelIdx + 2] = rgb[pOrder[2]];
-      }
-    }
-
-    // === STAGE 3: k-MSB XOR ENCRYPTION (Configurable k=1..8 & Selectable R/G/B Channels) ===
-    const activeCh = [
-      !!cfg.stage3Channels.r,
-      !!cfg.stage3Channels.g,
-      !!cfg.stage3Channels.b
-    ];
     let swappedCount = 0;
     let totalDiffSq = 0;
     let channelCount = 0;
@@ -1732,22 +1975,12 @@ const BitEngine = {
       for (let c = 0; c < 3; c++) {
         const cIdx = pixelIdx + c;
         const originalByte = originalCopy[cIdx];
-        const currentByte = stage2Data[cIdx];
-        let newByte = currentByte;
-
-        if (cfg.stage3Enabled && activeCh[c]) {
-          const keyBits = kk === 2 ? prngXor.next2Bits() : prngXor.nextKBits(kk);
-          newByte = kk === 2 ? this.xor2MSB(currentByte, keyBits) : this.xorKMSB(currentByte, keyBits, kk);
-        }
-
-        data[cIdx] = newByte;
-
+        const newByte = data[cIdx];
         if (newByte !== originalByte) swappedCount++;
         const diff = originalByte - newByte;
         totalDiffSq += diff * diff;
         channelCount++;
       }
-      data[pixelIdx + 3] = stage2Data[pixelIdx + 3];
     }
 
     const mse = channelCount > 0 ? (totalDiffSq / channelCount) : 0;
@@ -1764,11 +1997,10 @@ const BitEngine = {
 
   /**
    * Core 3-Stage Decryption with explicit PRNG streams, configurable k (1..8, default 2),
-   * and customizable stage configuration (reversing only enabled stages in exact inverse order).
+   * and customizable stage configuration (reversing only enabled stages in exact inverse execution order).
    */
   _decryptWithStreams(imageData, prngPixel, prngChannel, prngXor, maskOrRegions = null, kVal = 2, stageConfig = null) {
     const cfg = this.normalizeStageConfig(stageConfig, kVal);
-    const kk = cfg.k;
     const W = imageData.width;
     const H = imageData.height;
     const data = imageData.data;
@@ -1780,129 +2012,19 @@ const BitEngine = {
       return { imageData, swappedCount: 0, mse: 0, psnr: '∞', stageConfig: cfg };
     }
 
-    // === REVERSE STAGE 3: UNDO k-MSB XOR ENCRYPTION (if Stage 3 was enabled) ===
-    const unXorData = new Uint8ClampedArray(data);
-    if (cfg.stage3Enabled) {
-      const activeCh = [
-        !!cfg.stage3Channels.r,
-        !!cfg.stage3Channels.g,
-        !!cfg.stage3Channels.b
-      ];
-      for (let idx = 0; idx < M; idx++) {
-        const pixelIdx = targetIndices[idx] * 4;
-        for (let c = 0; c < 3; c++) {
-          const cIdx = pixelIdx + c;
-          if (activeCh[c]) {
-            const keyBits = kk === 2 ? prngXor.next2Bits() : prngXor.nextKBits(kk);
-            unXorData[cIdx] = kk === 2 ? this.xor2MSB(data[cIdx], keyBits) : this.xorKMSB(data[cIdx], keyBits, kk);
-          } else {
-            unXorData[cIdx] = data[cIdx];
-          }
-        }
+    let currentData = new Uint8ClampedArray(data);
+    for (let s = cfg.stageOrder.length - 1; s >= 0; s--) {
+      const stageNum = cfg.stageOrder[s];
+      if (stageNum === 1 && cfg.stage1Enabled) {
+        currentData = this._applyStage1(currentData, W, H, targetIndices, cfg.stage1BlockSize, prngPixel, true);
+      } else if (stageNum === 2 && cfg.stage2Enabled) {
+        currentData = this._applyStage2(currentData, targetIndices, cfg, prngChannel, true);
+      } else if (stageNum === 3 && cfg.stage3Enabled) {
+        currentData = this._applyStage3(currentData, targetIndices, cfg, prngXor);
       }
     }
 
-    // === REVERSE STAGE 2: UNDO RGB CHANNEL PERMUTATION (if Stage 2 was enabled) ===
-    const unChannelData = new Uint8ClampedArray(unXorData);
-    if (cfg.stage2Enabled) {
-      const isFixedPerm = cfg.stage2Mode === 'fixed';
-      const allowedIds = (cfg.stage2AllowedIds && cfg.stage2AllowedIds.length > 0)
-        ? cfg.stage2AllowedIds
-        : [0, 1, 2, 3, 4, 5];
-      const allowedCount = allowedIds.length;
-      for (let idx = 0; idx < M; idx++) {
-        const pixelIdx = targetIndices[idx] * 4;
-        const r = unXorData[pixelIdx];
-        const g = unXorData[pixelIdx + 1];
-        const b = unXorData[pixelIdx + 2];
-        const rgb = [r, g, b];
-
-        const permIdx = isFixedPerm
-          ? cfg.stage2FixedPermId
-          : allowedIds[prngChannel.nextInt(allowedCount)];
-        const invOrder = this.INV_CHANNEL_PERMS[permIdx];
-
-        unChannelData[pixelIdx] = rgb[invOrder[0]];
-        unChannelData[pixelIdx + 1] = rgb[invOrder[1]];
-        unChannelData[pixelIdx + 2] = rgb[invOrder[2]];
-      }
-    }
-
-    // === REVERSE STAGE 1: UNDO PIXEL PERMUTATION (if Stage 1 was enabled) ===
-    data.set(unChannelData);
-    if (cfg.stage1Enabled) {
-      const B = cfg.stage1BlockSize;
-      if (B <= 1) {
-        const perm = new Int32Array(M);
-        for (let i = 0; i < M; i++) perm[i] = i;
-        for (let i = M - 1; i > 0; i--) {
-          const j = prngPixel.nextInt(i + 1);
-          const temp = perm[i];
-          perm[i] = perm[j];
-          perm[j] = temp;
-        }
-
-        for (let idx = 0; idx < M; idx++) {
-          const srcIdx = targetIndices[perm[idx]] * 4;
-          const dstIdx = targetIndices[idx] * 4;
-          data[dstIdx] = unChannelData[srcIdx];
-          data[dstIdx + 1] = unChannelData[srcIdx + 1];
-          data[dstIdx + 2] = unChannelData[srcIdx + 2];
-          data[dstIdx + 3] = unChannelData[srcIdx + 3];
-        }
-      } else {
-        const part = this.partitionMaskAwareBlocks(W, H, targetIndices, B);
-        const K = part.eligibleBlocks.length;
-        if (K >= 2) {
-          const blockPerm = new Int32Array(K);
-          for (let i = 0; i < K; i++) blockPerm[i] = i;
-          for (let i = K - 1; i > 0; i--) {
-            const j = prngPixel.nextInt(i + 1);
-            const temp = blockPerm[i];
-            blockPerm[i] = blockPerm[j];
-            blockPerm[j] = temp;
-          }
-
-          for (let bIdx = 0; bIdx < K; bIdx++) {
-            const srcTop = part.eligibleBlocks[blockPerm[bIdx]];
-            const dstTop = part.eligibleBlocks[bIdx];
-            for (let dy = 0; dy < B; dy++) {
-              const sRow = srcTop + dy * W;
-              const dRow = dstTop + dy * W;
-              for (let dx = 0; dx < B; dx++) {
-                const srcIdx = (sRow + dx) * 4;
-                const dstIdx = (dRow + dx) * 4;
-                data[dstIdx] = unChannelData[srcIdx];
-                data[dstIdx + 1] = unChannelData[srcIdx + 1];
-                data[dstIdx + 2] = unChannelData[srcIdx + 2];
-                data[dstIdx + 3] = unChannelData[srcIdx + 3];
-              }
-            }
-          }
-        }
-
-        const L = part.boundaryIndices.length;
-        if (L >= 2) {
-          const boundPerm = new Int32Array(L);
-          for (let i = 0; i < L; i++) boundPerm[i] = i;
-          for (let i = L - 1; i > 0; i--) {
-            const j = prngPixel.nextInt(i + 1);
-            const temp = boundPerm[i];
-            boundPerm[i] = boundPerm[j];
-            boundPerm[j] = temp;
-          }
-
-          for (let i = 0; i < L; i++) {
-            const srcIdx = part.boundaryIndices[boundPerm[i]] * 4;
-            const dstIdx = part.boundaryIndices[i] * 4;
-            data[dstIdx] = unChannelData[srcIdx];
-            data[dstIdx + 1] = unChannelData[srcIdx + 1];
-            data[dstIdx + 2] = unChannelData[srcIdx + 2];
-            data[dstIdx + 3] = unChannelData[srcIdx + 3];
-          }
-        }
-      }
-    }
+    data.set(currentData);
 
     let swappedCount = 0;
     let totalDiffSq = 0;
@@ -2683,17 +2805,21 @@ const BitEngine = {
     }
 
     const hasOptionalTlv = tlvChunks.length > 0;
+    const hasExtendedStageConfig = !!stageCfg.hasExtendedStageConfig;
     const hasStageConfig = !stageCfg.isStandardDefault
+      || hasExtendedStageConfig
       || params.encryptionMode === 'advanced'
       || (params.stageConfig && params.stageConfig.encryptionMode === 'advanced')
       || !!params.alwaysIncludeStageConfig;
     const stageConfigBytes = hasStageConfig ? this.encodeStageConfigBytes(stageCfg, effectiveK) : new Uint8Array(0);
+    const extStageBytes = hasExtendedStageConfig ? this.encodeExtendedStageConfigBytes(stageCfg, effectiveK) : new Uint8Array(0);
 
     const extFlagsVal = (
       (maskProtected ? 0x01 : 0x00) |
       (hasOptionalTlv ? 0x02 : 0x00) |
       (hasStageConfig ? 0x04 : 0x00) |
-      (rawExtFlags & 0xF8)
+      (hasExtendedStageConfig ? 0x08 : 0x00) |
+      (rawExtFlags & 0xF0)
     ) & 0xFF;
     const hasExtFlags = extFlagsVal !== 0 ? 1 : 0;
 
@@ -2716,7 +2842,7 @@ const BitEngine = {
       for (const tc of tlvChunks) tlvTotalBytes += tc.byteLength;
     }
 
-    const headerPrefixLen = 3 + (hasExtFlags ? 1 : 0) + stageConfigBytes.byteLength + kdfVarint.byteLength;
+    const headerPrefixLen = 3 + (hasExtFlags ? 1 : 0) + stageConfigBytes.byteLength + extStageBytes.byteLength + kdfVarint.byteLength;
     const totalLen = headerPrefixLen + 16 + 32 + maskLenVarint.byteLength + maskByteLen + tlvTotalBytes;
     const buf = new Uint8Array(totalLen);
 
@@ -2730,6 +2856,10 @@ const BitEngine = {
     if (stageConfigBytes.byteLength > 0) {
       buf.set(stageConfigBytes, pos);
       pos += stageConfigBytes.byteLength;
+    }
+    if (extStageBytes.byteLength > 0) {
+      buf.set(extStageBytes, pos);
+      pos += extStageBytes.byteLength;
     }
     if (kdfVarint.byteLength > 0) {
       buf.set(kdfVarint, pos);
@@ -2810,17 +2940,19 @@ const BitEngine = {
     let maskProtected = false;
     let hasOptionalTlv = false;
     let hasStageConfig = false;
+    let hasExtendedStageConfig = false;
     let stageConfigOffset = -1;
 
     if (hasExtFlags) {
       if (pos >= bytes.byteLength) throw new Error("Truncated extension flags in v2 msBX chunk.");
       extFlags = bytes[pos++];
-      if ((extFlags & 0xF8) !== 0) {
+      if ((extFlags & 0xF0) !== 0) {
         throw new Error(`Unsupported required extension flags (0x${extFlags.toString(16)}) in PNG metadata.`);
       }
       maskProtected = (extFlags & 0x01) !== 0;
       hasOptionalTlv = (extFlags & 0x02) !== 0;
       hasStageConfig = (extFlags & 0x04) !== 0;
+      hasExtendedStageConfig = (extFlags & 0x08) !== 0;
     }
 
     let stageConfig;
@@ -2832,15 +2964,19 @@ const BitEngine = {
       const sb0 = bytes[pos++];
       const sb1 = bytes[pos++];
       let sb2 = 0x3F;
-      const s2On = ((sb0 >>> 5) & 1) === 1;
       const s2Fixed = ((sb0 >>> 3) & 1) === 1;
-      if (s2On && !s2Fixed && (sb0 & 0x07) === 0x07) {
+      if (!s2Fixed && (sb0 & 0x07) === 0x07) {
         if (pos >= bytes.byteLength) {
           throw new Error("Truncated Stage 2 allowed permutations mask in v2 msBX chunk.");
         }
         sb2 = bytes[pos++];
       }
-      stageConfig = this.decodeStageConfigBytes(sb0, sb1, k, sb2);
+      let extStage = null;
+      if (hasExtendedStageConfig) {
+        extStage = this.decodeExtendedStageConfigBytes(bytes, pos);
+        pos = extStage.nextOffset;
+      }
+      stageConfig = this.decodeStageConfigBytes(sb0, sb1, k, sb2, extStage);
     } else {
       stageConfig = this.normalizeStageConfig(null, k);
     }
@@ -5395,6 +5531,78 @@ const BitEngine = {
     return { differentPixels, mse, psnr };
   },
 
+  /**
+   * Detailed pixel-for-pixel comparison of two decoded RGBA ImageData objects.
+   * Validates dimensions without resizing and computes all metrics consistently
+   * across all 4 RGBA channels (R, G, B, A — 32 bits/pixel):
+   * - MSE = sum((A[c] - B[c])^2) / (width * height * 4)
+   * - PSNR = MSE === 0 ? Infinity : 10 * log10(255^2 / MSE)
+   * - differingBits = sum(popcount8(A[c] ^ B[c])) across all RGBA bytes
+   */
+  compareImageDataDetailed(imgA, imgB) {
+    if (!imgA || !imgB || !imgA.data || !imgB.data) {
+      throw new Error("Both original and restored images must be decoded before comparison.");
+    }
+    if (imgA.width !== imgB.width || imgA.height !== imgB.height) {
+      throw new Error(
+        `Image dimension mismatch: Uploaded original is ${imgA.width} × ${imgA.height} px, ` +
+        `while restored image is ${imgB.width} × ${imgB.height} px. Both images must have identical dimensions.`
+      );
+    }
+
+    const width = imgA.width;
+    const height = imgA.height;
+    const totalPixels = width * height;
+    const dataA = imgA.data;
+    const dataB = imgB.data;
+
+    let differentPixels = 0;
+    let differingBits = 0;
+    let sumSq = 0;
+
+    for (let p = 0; p < totalPixels; p++) {
+      const i = p * 4;
+      let pxDiff = false;
+      for (let c = 0; c < 4; c++) {
+        const a = dataA[i + c];
+        const b = dataB[i + c];
+        if (a !== b) {
+          pxDiff = true;
+          const d = a - b;
+          sumSq += d * d;
+          let x = (a ^ b) & 0xFF;
+          // 8-bit popcount
+          x = x - ((x >>> 1) & 0x55);
+          x = (x & 0x33) + ((x >>> 2) & 0x33);
+          differingBits += ((x + (x >>> 4)) & 0x0F);
+        }
+      }
+      if (pxDiff) differentPixels++;
+    }
+
+    const matchingPixels = totalPixels - differentPixels;
+    const matchingPct = totalPixels > 0 ? (matchingPixels / totalPixels) * 100 : 100;
+    const mse = totalPixels > 0 ? sumSq / (totalPixels * 4) : 0;
+    const psnr = mse === 0 ? Infinity : 10 * Math.log10((255 * 255) / mse);
+    const totalBits = totalPixels * 32;
+    const exactMatch = (differentPixels === 0 && differingBits === 0);
+
+    return {
+      width,
+      height,
+      totalPixels,
+      differentPixels,
+      matchingPixels,
+      matchingPct,
+      mse,
+      psnr,
+      differingBits,
+      totalBits,
+      exactMatch,
+      channelDefinition: 'RGBA (4 channels: R, G, B, A — 32 bits/pixel)'
+    };
+  },
+
   /* ==========================================================================
      PNG BINARY STRUCTURE EXPLORER, BIT/BYTE EDITOR & STORAGE OPTIMIZATION
      ========================================================================== */
@@ -5654,14 +5862,16 @@ const BitEngine = {
         let hasOptTlv = false;
         let maskProt = false;
         let hasStageCfg = false;
+        let hasExtStageCfg = false;
         if (hasExt && pos < bytes.byteLength) {
           const extB = bytes[pos];
           maskProt = (extB & 0x01) !== 0;
           hasOptTlv = (extB & 0x02) !== 0;
           hasStageCfg = (extB & 0x04) !== 0;
+          hasExtStageCfg = (extB & 0x08) !== 0;
           fields.push({
             field: 'Extension Flags Byte',
-            value: `maskProtected=${maskProt ? 1 : 0}, hasOptionalTLV=${hasOptTlv ? 1 : 0}, hasStageConfig=${hasStageCfg ? 1 : 0}`,
+            value: `maskProtected=${maskProt ? 1 : 0}, hasOptionalTLV=${hasOptTlv ? 1 : 0}, hasStageConfig=${hasStageCfg ? 1 : 0}, hasExtStageConfig=${hasExtStageCfg ? 1 : 0}`,
             rawHex: `0x${extB.toString(16).padStart(2, '0').toUpperCase()}`,
             rawBinary: toBin8(extB),
             chunkByteOffset: pos,
@@ -5672,7 +5882,7 @@ const BitEngine = {
             storage: '1 byte (8 bits)',
             storageBits: 8,
             category: 'header',
-            description: 'Bit 0 = keystream-protected mask; Bit 1 = optional TLV metadata; Bit 2 = custom 2-byte Stage Configuration.'
+            description: 'Bit 0 = keystream-protected mask; Bit 1 = optional TLV metadata; Bit 2 = Stage Configuration; Bit 3 = Extended Stage Order & Stage 2 Sequence.'
           });
           pos++;
         }
@@ -5791,7 +6001,54 @@ const BitEngine = {
             category: 'config',
             description: 'Bits 2..0 = Stage 3 XOR Channels (Bit 2=Red, Bit 1=Green, Bit 0=Blue).'
           });
-          pos += (isCustomS2 && pos + 2 < bytes.byteLength) ? 3 : 2;
+          pos += (!s2Fixed && (sb0 & 0x07) === 0x07 && pos + 2 < bytes.byteLength) ? 3 : 2;
+          if (hasExtStageCfg && pos < bytes.byteLength) {
+            try {
+              const extStart = pos;
+              const extDec = this.decodeExtendedStageConfigBytes(bytes, pos);
+              const orderArr = this.STAGE_ORDERS[extDec.stageOrderId] || [1, 2, 3];
+              const orderStr = orderArr.map(n => `Stage ${n}`).join(' → ');
+              const extB0 = bytes[extStart];
+              fields.push({
+                field: 'Encryption Stage Execution Order',
+                value: `${orderStr} (Order ID=${extDec.stageOrderId})`,
+                rawHex: `0x${extB0.toString(16).padStart(2, '0').toUpperCase()}`,
+                rawBinary: `${toBin8(extB0).slice(0, 3)} .....`,
+                chunkByteOffset: extStart,
+                chunkByteEnd: extStart,
+                fileByteOffset: dataOffset + extStart,
+                fileByteEnd: dataOffset + extStart,
+                bitRange: `Byte ${extStart} [bits 7..5]`,
+                storage: '3 bits',
+                storageBits: 3,
+                category: 'config',
+                description: 'Encodes which of the 6 possible execution orders of Stages 1, 2, and 3 was executed.'
+              });
+              if (extDec.stage2IsSequence && extDec.stage2Sequence) {
+                const seqLabels = extDec.stage2Sequence.map(id => this.CHANNEL_PERM_LABELS[id]);
+                const seqEnd = extDec.nextOffset - 1;
+                const seqSlice = bytes.subarray(extStart + 1, extDec.nextOffset);
+                fields.push({
+                  field: 'Stage 2 Custom Keyed Sequence',
+                  value: `${seqLabels.join(' → ')} (${seqLabels.length} perms, key-derived offset)`,
+                  rawHex: this.bytesToHex(seqSlice),
+                  rawBinary: Array.from(seqSlice).map(b => toBin8(b)).join(' '),
+                  chunkByteOffset: extStart + 1,
+                  chunkByteEnd: seqEnd,
+                  fileByteOffset: dataOffset + extStart + 1,
+                  fileByteEnd: dataOffset + seqEnd,
+                  bitRange: `Bytes ${extStart + 1}..${seqEnd} (packed 3-bit indices)`,
+                  storage: `${seqSlice.byteLength} B (${seqLabels.length * 3} bits)`,
+                  storageBits: seqLabels.length * 3,
+                  category: 'config',
+                  description: 'Ordered sequence of RGB permutation IDs applied cyclically from a key-derived starting offset.'
+                });
+              }
+              pos = extDec.nextOffset;
+            } catch (_) {
+              pos++;
+            }
+          }
         } else {
           fields.push({
             field: 'Encryption Mode & Stage Configuration',

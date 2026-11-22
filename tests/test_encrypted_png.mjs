@@ -1189,6 +1189,216 @@ async function runTests() {
     pass('Stage 2 RGB channel permutation customization (Key-Driven dynamic subsets, all 6 Fixed orders, Stage 2 OFF, ROI isolation, Key Image, Mask Protection, and Schema v1/v2) verified with 0 different pixels');
   }
 
+  // =========================================================================
+  // 20. CUSTOM STAGE EXECUTION ORDER (ALL 6 ORDERS) & STAGE 2 KEYED SEQUENCE
+  // =========================================================================
+  {
+    const W = 40;
+    const H = 32;
+    const baseImg = createSyntheticImage(W, H, 'rgb');
+    const orderKey = 'StageOrder-Seq-TestKey-2026!';
+    const keyImgBuf20 = await BitEngine.encodeLosslessPNG(origGray);
+    const keyImgDig20 = await BitEngine.hashKeyImage(keyImgBuf20);
+
+    // A. Test all 6 stage execution orders with Stage 1 (4x4 blocks) + Stage 2 + Stage 3 (k=3)
+    const cipherSnapshots = [];
+    for (let orderId = 0; orderId < 6; orderId++) {
+      const orderArr = BitEngine.STAGE_ORDERS[orderId];
+      const enc = await BitEngine.encryptToPNG(cloneImageData(baseImg), orderKey, null, {
+        k: 3,
+        iterations: 1000,
+        metaVersion: 2,
+        encryptionMode: 'advanced',
+        stageConfig: {
+          encryptionMode: 'advanced',
+          stageOrder: orderArr,
+          stage1Enabled: true,
+          stage1BlockSize: 4,
+          stage2Enabled: true,
+          stage2Mode: 'keyed',
+          stage2AllowedPerms: ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'],
+          stage3Enabled: true,
+          k: 3,
+          stage3Channels: { r: true, g: false, b: true }
+        }
+      });
+
+      const insp = await BitEngine.inspectEncryptedPNG(enc.pngBytes);
+      assert.equal(insp.metadata.stageConfig.stageOrderId, orderId, `Order ID ${orderId} must be persisted in msBX`);
+      assert.deepEqual(insp.metadata.stageConfig.stageOrder, orderArr, `Order [${orderArr}] must match decoded stageOrder`);
+
+      const dec = await BitEngine.decryptFromPNG(enc.pngBytes, orderKey);
+      assert.equal(countDiffPixels(baseImg, dec.imageData), 0, `Stage order [${orderArr.join('->')}] must recover 0 diff pixels`);
+
+      const encImg = (await BitEngine.decodeLosslessPNG(enc.pngBytes)).imageData;
+      cipherSnapshots.push(encImg);
+    }
+
+    // Verify custom orders produce genuinely different encrypted images compared to default [1,2,3]
+    for (let orderId = 1; orderId < 6; orderId++) {
+      assert.ok(countDiffPixels(cipherSnapshots[0], cipherSnapshots[orderId]) > 0, `Order ${orderId} must produce different ciphertext from default Order 0`);
+    }
+
+    // B. Test Custom Stage Order with disabled stages (e.g. [3, 1, 2] with Stage 2 OFF)
+    const encPartialOrder = await BitEngine.encryptToPNG(cloneImageData(baseImg), orderKey, null, {
+      k: 5,
+      iterations: 1000,
+      metaVersion: 2,
+      encryptionMode: 'advanced',
+      stageConfig: {
+        encryptionMode: 'advanced',
+        stageOrder: [3, 1, 2],
+        stage1Enabled: true,
+        stage1BlockSize: 8,
+        stage2Enabled: false,
+        stage3Enabled: true,
+        k: 5,
+        stage3Channels: { r: true, g: true, b: false }
+      }
+    });
+    const decPartialOrder = await BitEngine.decryptFromPNG(encPartialOrder.pngBytes, orderKey);
+    assert.equal(countDiffPixels(baseImg, decPartialOrder.imageData), 0, 'Custom order [3,1,2] with Stage 2 OFF must recover 0 diff pixels');
+
+    // C. Test Stage 2 Custom Keyed Sequence (all 6 reversed, 3-item custom order, 1-item) + ROI + Key Image + Mask Protection
+    const roiMask20 = new Uint8Array(W * H);
+    for (let y = 6; y < 26; y++) {
+      for (let x = 8; x < 32; x++) {
+        if (((x - 20) / 12) ** 2 + ((y - 16) / 10) ** 2 <= 1.0) {
+          roiMask20[y * W + x] = 1;
+        }
+      }
+    }
+
+    const seqCases = [
+      { label: 'All 6 Reversed', seq: ['BGR', 'BRG', 'GBR', 'GRB', 'RBG', 'RGB'], order: [2, 1, 3], scope: 'face' },
+      { label: '3-Item Custom {GRB->RBG->RGB}', seq: ['GRB', 'RBG', 'RGB'], order: [3, 2, 1], scope: 'body' },
+      { label: '3-Item Alt {RGB->RBG->GRB}', seq: ['RGB', 'RBG', 'GRB'], order: [3, 2, 1], scope: 'custom' },
+      { label: '1-Item {GBR}', seq: ['GBR'], order: [2, 3, 1], scope: 'face' }
+    ];
+
+    for (const sc of seqCases) {
+      const encSeq = await BitEngine.encryptToPNG(cloneImageData(baseImg), keyImgDig20.hex, roiMask20, {
+        k: 2,
+        iterations: 1000,
+        keyType: 'image',
+        scope: sc.scope,
+        protectMask: true,
+        metaVersion: 2,
+        encryptionMode: 'advanced',
+        stageConfig: {
+          encryptionMode: 'advanced',
+          stageOrder: sc.order,
+          stage1Enabled: true,
+          stage1BlockSize: 4,
+          stage2Enabled: true,
+          stage2Mode: 'sequence',
+          stage2Sequence: sc.seq,
+          stage3Enabled: true,
+          k: 2,
+          stage3Channels: { r: true, g: true, b: true }
+        }
+      });
+
+      const inspSeq = await BitEngine.inspectEncryptedPNG(encSeq.pngBytes);
+      assert.equal(inspSeq.metadata.stageConfig.stage2Mode, 'sequence', `${sc.label} must persist stage2Mode='sequence'`);
+      assert.deepEqual(inspSeq.metadata.stageConfig.stage2SequenceLabels, sc.seq, `${sc.label} must persist exact sequence order`);
+      assert.deepEqual(inspSeq.metadata.stageConfig.stageOrder, sc.order, `${sc.label} must persist exact stageOrder`);
+
+      // Verify pixels outside ROI are completely untouched
+      const encSeqImg = (await BitEngine.decodeLosslessPNG(encSeq.pngBytes)).imageData;
+      let outsideModified = 0;
+      for (let p = 0; p < W * H; p++) {
+        if (!roiMask20[p]) {
+          const i = p * 4;
+          if (encSeqImg.data[i] !== baseImg.data[i] ||
+              encSeqImg.data[i + 1] !== baseImg.data[i + 1] ||
+              encSeqImg.data[i + 2] !== baseImg.data[i + 2]) {
+            outsideModified++;
+          }
+        }
+      }
+      assert.equal(outsideModified, 0, `${sc.label} must leave all non-ROI pixels untouched`);
+
+      // Verify exact decryption recovery
+      const decSeq = await BitEngine.decryptFromPNG(encSeq.pngBytes, keyImgDig20.hex);
+      assert.equal(countDiffPixels(baseImg, decSeq.imageData), 0, `${sc.label} must recover 0 diff pixels`);
+
+      // Verify Binary Explorer field breakdown handles Extended Stage Block without error
+      const parsedStruct = BitEngine.parsePngBinaryStructure(encSeq.pngBytes);
+      const fields = (parsedStruct.msbxSection && parsedStruct.msbxSection.msbxBreakdown && parsedStruct.msbxSection.msbxBreakdown.fields)
+        ? parsedStruct.msbxSection.msbxBreakdown.fields
+        : [];
+      assert.ok(fields.some(f => f.field === 'Encryption Stage Execution Order'), 'Binary Explorer must describe stage execution order');
+      assert.ok(fields.some(f => f.field === 'Stage 2 Custom Keyed Sequence'), 'Binary Explorer must describe Stage 2 custom sequence');
+    }
+
+    // D. Verify Live Pre-Key Preview respects custom execution order & sequence mode
+    for (let orderId = 0; orderId < 6; orderId++) {
+      const pRes = BitEngine.previewPipelineStep(baseImg, roiMask20, {
+        encryptionMode: 'advanced',
+        stageOrderId: orderId,
+        stage1Enabled: true,
+        stage1BlockSize: 4,
+        stage2Enabled: true,
+        stage2Mode: 'sequence',
+        stage2Sequence: ['GRB', 'RBG', 'RGB'],
+        stage3Enabled: true,
+        k: 3
+      }, 2);
+      assert.equal(pRes.previewImageData.data.length, W * H * 4);
+      assert.deepEqual(pRes.executedStages, BitEngine.STAGE_ORDERS[orderId]);
+    }
+
+    pass('All 6 custom stage execution orders, Stage 2 Custom Keyed Sequence, ROI isolation, Key Image, Mask Protection, Binary Explorer fields, and live previews verified with 0 different pixels');
+  }
+
+  // =========================================================================
+  // 21. OPTIONAL DECRYPT ORIGINAL-VS-RESTORED IMAGE COMPARISON METRICS
+  // =========================================================================
+  {
+    const W = 24;
+    const H = 20;
+    const imgOrig = createSyntheticImage(W, H, 'rgb');
+    const imgSame = cloneImageData(imgOrig);
+
+    // A. Exact Match
+    const exactCmp = BitEngine.compareImageDataDetailed(imgOrig, imgSame);
+    assert.equal(exactCmp.exactMatch, true);
+    assert.equal(exactCmp.differentPixels, 0);
+    assert.equal(exactCmp.matchingPixels, W * H);
+    assert.equal(exactCmp.matchingPct, 100);
+    assert.equal(exactCmp.mse, 0);
+    assert.equal(exactCmp.psnr, Infinity);
+    assert.equal(exactCmp.differingBits, 0);
+
+    // B. Known 1-bit difference (flip LSB of pixel 0 Red channel)
+    const imgDiff1 = cloneImageData(imgOrig);
+    imgDiff1.data[0] = imgDiff1.data[0] ^ 0x01;
+    const diff1Cmp = BitEngine.compareImageDataDetailed(imgOrig, imgDiff1);
+    assert.equal(diff1Cmp.exactMatch, false);
+    assert.equal(diff1Cmp.differentPixels, 1);
+    assert.equal(diff1Cmp.matchingPixels, W * H - 1);
+    assert.equal(diff1Cmp.differingBits, 1);
+    assert.ok(Math.abs(diff1Cmp.mse - (1 / (W * H * 4))) < 1e-12);
+    assert.ok(Number.isFinite(diff1Cmp.psnr) && diff1Cmp.psnr > 0);
+
+    // C. Known multi-bit difference (flip 3 bits in pixel 5 Green channel: 0x07)
+    const imgDiff3 = cloneImageData(imgOrig);
+    imgDiff3.data[5 * 4 + 1] = imgDiff3.data[5 * 4 + 1] ^ 0x07;
+    const diff3Cmp = BitEngine.compareImageDataDetailed(imgOrig, imgDiff3);
+    assert.equal(diff3Cmp.exactMatch, false);
+    assert.equal(diff3Cmp.differentPixels, 1);
+    assert.equal(diff3Cmp.differingBits, 3);
+
+    // D. Dimension mismatch must throw understandable error without resizing
+    const imgWrongDims = createSyntheticImage(W + 4, H, 'rgb');
+    assert.throws(() => {
+      BitEngine.compareImageDataDetailed(imgOrig, imgWrongDims);
+    }, /dimension mismatch/i, 'Dimension mismatch must be rejected with clear error');
+
+    pass('Detailed RGBA image comparison (exact match, XOR popcount bit difference, MSE/PSNR, matching %, and dimension mismatch rejection) verified');
+  }
+
   console.log(`\nALL ${passed} TEST SUITES PASSED SUCCESSFULLY.`);
 }
 

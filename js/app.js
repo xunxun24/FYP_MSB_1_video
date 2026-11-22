@@ -52,6 +52,10 @@ document.addEventListener('DOMContentLoaded', () => {
     encKeyImage: null,
     decKeyType: 'text',
     decKeyImage: null,
+    advStageOrder: [1, 2, 3],
+    advStage2Sequence: [0, 1, 2, 3, 4, 5],
+    decCompareOrigImageData: null,
+    decCompareOrigName: '',
     stegoCover: null,
     stegoStego: null
   };
@@ -284,8 +288,16 @@ document.addEventListener('DOMContentLoaded', () => {
       : 1;
     const s2On = document.getElementById('adv-s2-enable') ? document.getElementById('adv-s2-enable').checked : true;
     const s3On = document.getElementById('adv-s3-enable') ? document.getElementById('adv-s3-enable').checked : true;
-    const s2Mode = document.getElementById('adv-s2-mode') ? document.getElementById('adv-s2-mode').value : 'keyed';
-    const s2FixedId = document.getElementById('adv-s2-fixed-perm') ? (parseInt(document.getElementById('adv-s2-fixed-perm').value, 10) || 0) : 1;
+    const rawS2Mode = document.getElementById('adv-s2-mode') ? document.getElementById('adv-s2-mode').value : 'keyed';
+    const s2Mode = rawS2Mode === 'sequence' ? 'sequence' : 'keyed';
+    let s2AllowedMask = 0;
+    for (let i = 0; i < 6; i++) {
+      const chk = document.getElementById(`adv-s2-chk-${i}`);
+      if (chk && chk.checked) s2AllowedMask |= (1 << i);
+    }
+    if (s2AllowedMask === 0 && !document.getElementById('adv-s2-chk-0')) {
+      s2AllowedMask = 0x3F;
+    }
     const kVal = document.getElementById('adv-s3-k-slider') ? (parseInt(document.getElementById('adv-s3-k-slider').value, 10) || 2) : 2;
     const rOn = document.getElementById('adv-s3-ch-r') ? document.getElementById('adv-s3-ch-r').checked : true;
     const gOn = document.getElementById('adv-s3-ch-g') ? document.getElementById('adv-s3-ch-g').checked : true;
@@ -305,6 +317,13 @@ document.addEventListener('DOMContentLoaded', () => {
         config: null
       };
     }
+    if (s2On && s2AllowedMask === 0) {
+      return {
+        valid: false,
+        error: 'Stage 2 is enabled: Please select at least one RGB arrangement (RGB, RBG, GRB, GBR, BRG, or BGR).',
+        config: null
+      };
+    }
     if (s3On && !rOn && !gOn && !bOn) {
       return {
         valid: false,
@@ -316,11 +335,13 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const cfg = BitEngine.normalizeStageConfig({
         encryptionMode: 'advanced',
+        stageOrder: Array.isArray(state.advStageOrder) ? state.advStageOrder.slice() : [1, 2, 3],
         stage1Enabled: s1On,
         stage1BlockSize: s1BlockSize,
         stage2Enabled: s2On,
-        stage2Mode: s2Mode === 'fixed' ? 'fixed' : 'keyed',
-        stage2FixedPermId: s2FixedId,
+        stage2Mode: s2Mode,
+        stage2AllowedMask: s2AllowedMask,
+        stage2Sequence: Array.isArray(state.advStage2Sequence) ? state.advStage2Sequence.slice() : [0, 1, 2, 3, 4, 5],
         stage3Enabled: s3On,
         k: kVal,
         stage3Channels: { r: rOn, g: gOn, b: bOn }
@@ -653,10 +674,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const s1BlockSlider = document.getElementById('adv-s1-block-slider');
     const s1BlockBadge = document.getElementById('adv-s1-block-badge');
     const btnS1ResetBlock = document.getElementById('btn-adv-s1-reset-block');
+    const btnS1ApplyBlock = document.getElementById('btn-adv-s1-apply-block');
+    const s1ApplyHint = document.getElementById('adv-s1-apply-hint');
+    const s1PresetBtns = Array.from(document.querySelectorAll('.adv-block-preset-btn'));
     const s1ReshuffleBtn = document.getElementById('btn-adv-s1-reshuffle');
     const s1DemoTitle = document.getElementById('adv-s1-demo-title');
     const s1DemoGrid = document.getElementById('adv-s1-demo-grid');
     const s1DemoCaption = document.getElementById('adv-s1-demo-caption');
+    const advStagesContainer = document.getElementById('adv-stages-container');
+    const s1NumBadge = document.getElementById('adv-s1-num-badge');
+    const s2NumBadge = document.getElementById('adv-s2-num-badge');
+    const s3NumBadge = document.getElementById('adv-s3-num-badge');
+    const stageOrderListEl = document.getElementById('adv-stage-order-list');
+    const stageOrderBadgeEl = document.getElementById('adv-stage-order-badge');
+    const btnResetStageOrder = document.getElementById('btn-adv-reset-order');
+    let appliedPreviewBlockSize = 1;
+
+    const s1PreviewTitle = document.getElementById('adv-s1-preview-title');
     const s1PreviewCanvas = document.getElementById('canvas-adv-s1-preview');
     const s1PreviewScopeTag = document.getElementById('adv-s1-preview-scope-tag');
     const s1BlockStats = document.getElementById('adv-s1-block-stats');
@@ -665,20 +699,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const s2Badge = document.getElementById('adv-s2-badge');
     const s2Card = document.getElementById('adv-card-stage2');
     const s2ModeSel = document.getElementById('adv-s2-mode');
-    const s2FixedGroup = document.getElementById('adv-s2-fixed-group');
-    const s2FixedSel = document.getElementById('adv-s2-fixed-perm');
     const s2VisualBox = document.getElementById('adv-s2-visual-box');
     const s2ModeRadioKeyed = document.getElementById('adv-s2-mode-keyed');
-    const s2ModeRadioFixed = document.getElementById('adv-s2-mode-fixed');
+    const s2ModeRadioSeq = document.getElementById('adv-s2-mode-sequence');
     const lblS2ModeKeyed = document.getElementById('lbl-adv-s2-mode-keyed');
-    const lblS2ModeFixed = document.getElementById('lbl-adv-s2-mode-fixed');
+    const lblS2ModeSeq = document.getElementById('lbl-adv-s2-mode-sequence');
     const s2KeyedGroup = document.getElementById('adv-s2-keyed-group');
+    const s2ModeHelp = document.getElementById('adv-s2-mode-help');
     const s2AllowedBadge = document.getElementById('adv-s2-allowed-badge');
     const btnS2ResetPerms = document.getElementById('btn-adv-s2-reset-perms');
     const s2PermChks = [0, 1, 2, 3, 4, 5].map(i => document.getElementById(`adv-s2-chk-${i}`));
     const s2PermLbls = [0, 1, 2, 3, 4, 5].map(i => document.getElementById(`lbl-adv-s2-chk-${i}`));
-    const s2FixRadios = [0, 1, 2, 3, 4, 5].map(i => document.getElementById(`adv-s2-fix-${i}`));
-    const s2FixLbls = [0, 1, 2, 3, 4, 5].map(i => document.getElementById(`lbl-adv-s2-fix-${i}`));
+    const s2SeqGroup = document.getElementById('adv-s2-sequence-group');
+    const s2SeqListEl = document.getElementById('adv-s2-seq-list');
+    const s2SeqPreviewBadge = document.getElementById('adv-s2-seq-preview-badge');
+    const btnS2ResetSeq = document.getElementById('btn-adv-s2-reset-seq');
+    const s2PreviewTitle = document.getElementById('adv-s2-preview-title');
     const s2PreviewCanvas = document.getElementById('canvas-adv-s2-preview');
     const s2PreviewScopeTag = document.getElementById('adv-s2-preview-scope-tag');
     const s2PreviewStats = document.getElementById('adv-s2-preview-stats');
@@ -696,6 +732,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const lblChB = document.getElementById('lbl-adv-ch-b');
     const s3BitplanesEl = document.getElementById('adv-s3-bitplanes');
     const s3BitsSummaryEl = document.getElementById('adv-s3-bits-summary');
+    const s3PreviewTitle = document.getElementById('adv-s3-preview-title');
     const s3PreviewCanvas = document.getElementById('canvas-adv-s3-preview');
     const s3PreviewScopeTag = document.getElementById('adv-s3-preview-scope-tag');
     const s3PreviewStats = document.getElementById('adv-s3-preview-stats');
@@ -738,10 +775,58 @@ document.addEventListener('DOMContentLoaded', () => {
       return imgData;
     }
 
+    function getCurrentPreviewStageConfig() {
+      const s1On = s1Chk ? s1Chk.checked : true;
+      const B = Math.max(1, Math.min(32, appliedPreviewBlockSize | 0));
+      const s2On = s2Chk ? s2Chk.checked : true;
+      const mode = (s2ModeSel && s2ModeSel.value === 'sequence') ? 'sequence' : 'keyed';
+      const s3On = s3Chk ? s3Chk.checked : true;
+      const k = s3KSlider ? (parseInt(s3KSlider.value, 10) || 2) : 2;
+      const rOn = s3ChR ? s3ChR.checked : true;
+      const gOn = s3ChG ? s3ChG.checked : true;
+      const bOn = s3ChB ? s3ChB.checked : true;
+      const allowedIds = [];
+      for (let i = 0; i < 6; i++) {
+        if (s2PermChks[i] && s2PermChks[i].checked) allowedIds.push(i);
+      }
+      const hasS2Perms = allowedIds.length > 0;
+      const hasS3Ch = rOn || gOn || bOn;
+      const effS1 = s1On;
+      const effS2 = s2On && hasS2Perms;
+      const effS3 = s3On && hasS3Ch;
+      const allOff = !effS1 && !effS2 && !effS3;
+      return {
+        allOff,
+        cfg: BitEngine.normalizeStageConfig({
+          encryptionMode: 'advanced',
+          stageOrder: Array.isArray(state.advStageOrder) ? state.advStageOrder.slice() : [1, 2, 3],
+          stage1Enabled: allOff ? true : effS1,
+          stage1BlockSize: B,
+          stage2Enabled: allOff ? false : effS2,
+          stage2Mode: mode,
+          stage2AllowedIds: hasS2Perms ? allowedIds : [0, 1, 2, 3, 4, 5],
+          stage2Sequence: Array.isArray(state.advStage2Sequence) && state.advStage2Sequence.length > 0
+            ? state.advStage2Sequence.slice()
+            : (hasS2Perms ? allowedIds : [0, 1, 2, 3, 4, 5]),
+          stage3Enabled: allOff ? false : effS3,
+          k,
+          stage3Channels: hasS3Ch ? { r: rOn, g: gOn, b: bOn } : { r: true, g: true, b: true }
+        }, k)
+      };
+    }
+
+    function formatPreviewStepChain(stageNum) {
+      const order = Array.isArray(state.advStageOrder) ? state.advStageOrder : [1, 2, 3];
+      const posIdx = order.indexOf(stageNum);
+      const stepNum = posIdx >= 0 ? posIdx + 1 : stageNum;
+      const chain = order.slice(0, posIdx + 1).map(n => `Stage ${n}`).join(' → ');
+      return { posIdx: posIdx >= 0 ? posIdx : 0, stepNum, chain };
+    }
+
     function renderStage1LivePreview() {
       if (!s1PreviewCanvas || !s1BlockStats) return;
       const s1On = s1Chk ? s1Chk.checked : true;
-      const B = s1BlockSlider ? (parseInt(s1BlockSlider.value, 10) || 1) : 1;
+      const B = Math.max(1, Math.min(32, appliedPreviewBlockSize | 0));
       const scopeLabels = {
         full: 'Entire Image',
         person: 'Body Silhouette',
@@ -749,12 +834,17 @@ document.addEventListener('DOMContentLoaded', () => {
         custom: 'Custom ROI'
       };
       const scopeName = scopeLabels[state.encScope] || 'Entire Image';
+      const stepInfo = formatPreviewStepChain(1);
+
+      if (s1PreviewTitle) {
+        s1PreviewTitle.innerHTML = `<i class="fa-solid fa-eye"></i> <b>Illustrative Stage 1 Preview (Step ${stepInfo.stepNum} of 3):</b> Cumulative ${stepInfo.chain}`;
+      }
 
       if (s1PreviewScopeTag) {
         s1PreviewScopeTag.className = 'adv-stage-badge ' + (s1On ? 'enabled' : 'disabled');
         s1PreviewScopeTag.textContent = s1On
-          ? `Scope: ${scopeName} • ${B}×${B} px (${(B * B).toLocaleString()} px/block)`
-          : 'Stage 1 Disabled (No Shuffling)';
+          ? `Step ${stepInfo.stepNum} • ${scopeName} • ${B}×${B} px`
+          : 'Stage 1 Disabled (Skipped)';
       }
 
       let srcImageData = null;
@@ -781,21 +871,21 @@ document.addEventListener('DOMContentLoaded', () => {
       const W = srcImageData.width;
       const H = srcImageData.height;
 
-      if (!s1On) {
-        s1PreviewCanvas.width = W;
-        s1PreviewCanvas.height = H;
-        s1PreviewCanvas.getContext('2d').putImageData(srcImageData, 0, 0);
-        s1BlockStats.innerHTML = `
-          <div><strong>Stage 1 is Disabled:</strong> Spatial pixel positions remain in their original <code>(x, y)</code> locations. Enable Stage 1 to shuffle individual pixels (<code>1 × 1 px</code>) or square blocks (<code>2 × 2</code> to <code>32 × 32 px</code>).</div>
-        `;
-        return;
-      }
-
-      const previewRes = BitEngine.previewStage1BlockPermutation(srcImageData, activeMask, B);
+      const { allOff, cfg } = getCurrentPreviewStageConfig();
+      const previewRes = allOff
+        ? { previewImageData: srcImageData, partition: BitEngine.partitionMaskAwareBlocks(W, H, BitEngine.getTargetPixelIndices(srcImageData, activeMask), B) }
+        : BitEngine.previewPipelineStep(srcImageData, activeMask, cfg, stepInfo.posIdx);
       const part = previewRes.partition;
       s1PreviewCanvas.width = W;
       s1PreviewCanvas.height = H;
       s1PreviewCanvas.getContext('2d').putImageData(previewRes.previewImageData, 0, 0);
+
+      if (!s1On) {
+        s1BlockStats.innerHTML = `
+          <div><strong>Stage 1 is Disabled (Skipped in Step ${stepInfo.stepNum}):</strong> Spatial pixel positions remain unchanged. Enable Stage 1 to shuffle individual pixels (<code>1 × 1 px</code>) or square blocks (<code>2 × 2</code> to <code>32 × 32 px</code>).</div>
+        `;
+        return;
+      }
 
       const samplePrefix = usingSyntheticSample
         ? `<span style="color:var(--primary-blue); font-weight:600;"><i class="fa-solid fa-wand-sparkles"></i> Synthetic Sample Preview (${W}×${H} px) — Upload an image in Step 1 to preview your own photo:</span>`
@@ -840,12 +930,21 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof renderStage3LivePreview === 'function') renderStage3LivePreview();
     };
 
-    function renderStage1Demo() {
+    function renderStage1Demo(skipLivePreview = false) {
       if (!s1DemoGrid) return;
       const s1On = s1Chk ? s1Chk.checked : true;
-      const B = s1BlockSlider ? (parseInt(s1BlockSlider.value, 10) || 1) : 1;
+      const rawB = s1BlockSlider ? parseInt(s1BlockSlider.value, 10) : 1;
+      const B = Number.isNaN(rawB) ? 1 : Math.max(1, Math.min(32, rawB));
       const pxPerUnit = B * B;
       const unitPrefix = B > 1 ? 'B' : 'P';
+
+      s1PresetBtns.forEach(btn => {
+        const val = parseInt(btn.getAttribute('data-block'), 10);
+        btn.classList.toggle('active', val === B);
+      });
+      if (s1ApplyHint) {
+        s1ApplyHint.style.display = (B !== appliedPreviewBlockSize) ? 'block' : 'none';
+      }
 
       if (s1BlockBadge) {
         s1BlockBadge.textContent = B === 1
@@ -884,22 +983,27 @@ document.addEventListener('DOMContentLoaded', () => {
           : `<b>${B} × ${B} Block Permutation Mode:</b> Each tile <code>B₀–B₇</code> is a complete <b>${B} × ${B} block (${pxPerUnit.toLocaleString()} pixels)</b> that moves together as an intact square tile, preserving its internal <code>(dx, dy)</code> pixel layout while irregular ROI boundary pixels are permuted individually.`;
       }
 
-      renderStage1LivePreview();
+      if (!skipLivePreview) {
+        renderStage1LivePreview();
+      }
     }
 
     function renderStage2LivePreview() {
       if (!s2PreviewCanvas || !s2PreviewStats) return;
       const s2On = s2Chk ? s2Chk.checked : true;
-      const mode = s2ModeSel ? s2ModeSel.value : 'keyed';
-      const fixedId = s2FixedSel ? (parseInt(s2FixedSel.value, 10) || 0) : 1;
-      const s1On = s1Chk ? s1Chk.checked : true;
-      const B = s1BlockSlider ? (parseInt(s1BlockSlider.value, 10) || 1) : 1;
+      const mode = (s2ModeSel && s2ModeSel.value === 'sequence') ? 'sequence' : 'keyed';
+      const stepInfo = formatPreviewStepChain(2);
 
       let allowedIds = [];
       for (let i = 0; i < 6; i++) {
         if (s2PermChks[i] && s2PermChks[i].checked) allowedIds.push(i);
       }
       if (allowedIds.length === 0) allowedIds = [0, 1, 2, 3, 4, 5];
+
+      const seqIds = (Array.isArray(state.advStage2Sequence) && state.advStage2Sequence.length > 0)
+        ? state.advStage2Sequence.slice()
+        : allowedIds.slice();
+      const seqLabels = seqIds.map(id => BitEngine.CHANNEL_PERM_LABELS[id]);
 
       const scopeLabels = {
         full: 'Entire Image',
@@ -909,13 +1013,17 @@ document.addEventListener('DOMContentLoaded', () => {
       };
       const scopeName = scopeLabels[state.encScope] || 'Entire Image';
 
+      if (s2PreviewTitle) {
+        s2PreviewTitle.innerHTML = `<i class="fa-solid fa-palette"></i> <b>Illustrative Stage 2 Preview (Step ${stepInfo.stepNum} of 3):</b> Cumulative ${stepInfo.chain}`;
+      }
+
       if (s2PreviewScopeTag) {
-        s2PreviewScopeTag.className = 'adv-stage-badge ' + (!s2On ? 'disabled' : (mode === 'fixed' ? 'experimental' : 'enabled'));
+        s2PreviewScopeTag.className = 'adv-stage-badge ' + (!s2On ? 'disabled' : (mode === 'sequence' ? 'experimental' : 'enabled'));
         s2PreviewScopeTag.textContent = !s2On
-          ? 'Stage 2 Disabled'
-          : (mode === 'fixed'
-            ? `Fixed ${BitEngine.CHANNEL_PERM_LABELS[fixedId] || 'RGB'} • ${scopeName}`
-            : `Key-Driven (${allowedIds.length}/6 Perms) • ${scopeName}`);
+          ? 'Stage 2 Disabled (Skipped)'
+          : (mode === 'sequence'
+            ? `Step ${stepInfo.stepNum} • Sequence (${seqIds.length} Perms) • ${scopeName}`
+            : `Step ${stepInfo.stepNum} • Key-Driven (${allowedIds.length}/6) • ${scopeName}`);
       }
 
       let srcImageData = null;
@@ -941,16 +1049,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const W = srcImageData.width;
       const H = srcImageData.height;
-      const previewRes = BitEngine.previewStage2ChannelPermutation(srcImageData, activeMask, {
-        encryptionMode: 'advanced',
-        stage1Enabled: s1On,
-        stage1BlockSize: B,
-        stage2Enabled: s2On,
-        stage2Mode: mode,
-        stage2FixedPermId: fixedId,
-        stage2AllowedIds: allowedIds,
-        stage3Enabled: false
-      });
+      const { allOff, cfg } = getCurrentPreviewStageConfig();
+      const previewRes = allOff
+        ? { previewImageData: srcImageData }
+        : BitEngine.previewPipelineStep(srcImageData, activeMask, cfg, stepInfo.posIdx);
 
       s2PreviewCanvas.width = W;
       s2PreviewCanvas.height = H;
@@ -963,29 +1065,28 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!s2On) {
         s2PreviewStats.innerHTML = `
           <div>${samplePrefix}</div>
-          <div style="margin-top:6px;"><strong>Stage 2 Disabled:</strong> Original RGB channel ordering is preserved${s1On ? ' after Stage 1 spatial shuffling' : ''}.</div>
+          <div style="margin-top:6px;"><strong>Stage 2 Disabled (Skipped in Step ${stepInfo.stepNum}):</strong> RGB channel ordering is preserved.</div>
         `;
-      } else if (mode === 'fixed') {
-        const permLabel = BitEngine.CHANNEL_PERM_LABELS[fixedId] || 'RGB';
+      } else if (mode === 'sequence') {
         s2PreviewStats.innerHTML = `
           <div>${samplePrefix}</div>
           <div class="adv-s1-stat-list">
-            <div class="adv-s1-stat-item">Stage 2 Mode<strong>Fixed RGB Order</strong></div>
-            <div class="adv-s1-stat-item">Arrangement<strong>${permLabel}</strong></div>
-            <div class="adv-s1-stat-item">Scope<strong>${scopeName}</strong></div>
+            <div class="adv-s1-stat-item">Stage 2 Behavior<strong>Custom Keyed Sequence</strong></div>
+            <div class="adv-s1-stat-item">Active Sequence<strong>${seqLabels.join(' → ')}</strong></div>
+            <div class="adv-s1-stat-item">Pipeline Step<strong>Step ${stepInfo.stepNum} (${stepInfo.chain})</strong></div>
           </div>
-          <div style="margin-top:6px; font-size:11.5px;">Every pixel in the region has its channels mapped uniformly to <b>${permLabel}</b>${s1On ? ` (after ${B}×${B} Stage 1 shuffle)` : ''}.</div>
+          <div style="margin-top:6px; font-size:11.5px;">Illustrative pre-key preview cycling through <code>${seqLabels.join(' → ')}</code> from a demo offset. Actual encryption derives the starting offset from your secret key.</div>
         `;
       } else {
         const allowedLabels = allowedIds.map(id => BitEngine.CHANNEL_PERM_LABELS[id]).join(', ');
         s2PreviewStats.innerHTML = `
           <div>${samplePrefix}</div>
           <div class="adv-s1-stat-list">
-            <div class="adv-s1-stat-item">Stage 2 Mode<strong>Key-Driven Dynamic</strong></div>
+            <div class="adv-s1-stat-item">Stage 2 Behavior<strong>Key-Driven Dynamic</strong></div>
             <div class="adv-s1-stat-item">Allowed Pool<strong>${allowedIds.length} / 6 Perms</strong></div>
-            <div class="adv-s1-stat-item">Active Set<strong>${allowedLabels}</strong></div>
+            <div class="adv-s1-stat-item">Pipeline Step<strong>Step ${stepInfo.stepNum} (${stepInfo.chain})</strong></div>
           </div>
-          <div style="margin-top:6px; font-size:11.5px;">Illustrative pre-key preview: each pixel draws from <code>[${allowedLabels}]</code>. Actual encryption uses your secret password or key image.</div>
+          <div style="margin-top:6px; font-size:11.5px;">Illustrative pre-key preview: each pixel draws independently from <code>[${allowedLabels}]</code>. Actual encryption uses your secret password or key image.</div>
         `;
       }
     }
@@ -993,19 +1094,20 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderStage2Visual() {
       if (!s2VisualBox) return;
       const s2On = s2Chk ? s2Chk.checked : true;
-      const mode = s2ModeSel ? s2ModeSel.value : 'keyed';
-      const fixedId = s2FixedSel ? (parseInt(s2FixedSel.value, 10) || 0) : 1;
+      const mode = (s2ModeSel && s2ModeSel.value === 'sequence') ? 'sequence' : 'keyed';
       if (s2KeyedGroup) {
-        s2KeyedGroup.style.display = (s2On && mode === 'keyed') ? 'block' : 'none';
+        s2KeyedGroup.style.display = s2On ? 'block' : 'none';
       }
-      if (s2FixedGroup) {
-        s2FixedGroup.style.display = (s2On && mode === 'fixed') ? 'block' : 'none';
+      if (s2SeqGroup) {
+        s2SeqGroup.style.display = (s2On && mode === 'sequence') ? 'block' : 'none';
+      }
+      if (s2ModeHelp) {
+        s2ModeHelp.innerHTML = mode === 'sequence'
+          ? '<i class="fa-solid fa-circle-info"></i> Deselecting an arrangement removes it from your sequence below; selecting a new one appends it to the end.'
+          : '<i class="fa-solid fa-circle-info"></i> Your encryption key independently chooses from the selected RGB arrangements for each pixel.';
       }
 
       const sampleRgb = [255, 100, 50];
-      const chNames = ['R', 'G', 'B'];
-      const chCls = ['r', 'g', 'b'];
-
       const allowedIds = [];
       for (let i = 0; i < 6; i++) {
         if (s2PermChks[i] && s2PermChks[i].checked) allowedIds.push(i);
@@ -1032,19 +1134,32 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
           </div>
         `;
-      } else if (mode === 'fixed') {
-        const pOrder = BitEngine.CHANNEL_PERMS[fixedId] || [0, 1, 2];
-        const outR = sampleRgb[pOrder[0]];
-        const outG = sampleRgb[pOrder[1]];
-        const outB = sampleRgb[pOrder[2]];
-        const permName = BitEngine.CHANNEL_PERM_LABELS[fixedId] || 'RGB';
+      } else if (mode === 'sequence') {
+        const seq = Array.isArray(state.advStage2Sequence) ? state.advStage2Sequence : [];
+        const examplesHtml = seq.length === 0
+          ? `<div style="color:#dc2626; font-size:12px; font-weight:600;"><i class="fa-solid fa-triangle-exclamation"></i> Please select at least one RGB arrangement above.</div>`
+          : [0, 1, 2, 3].map(pxIdx => {
+              const id = seq[pxIdx % seq.length];
+              const pOrder = BitEngine.CHANNEL_PERMS[id];
+              const lbl = BitEngine.CHANNEL_PERM_LABELS[id];
+              const oR = sampleRgb[pOrder[0]];
+              const oG = sampleRgb[pOrder[1]];
+              const oB = sampleRgb[pOrder[2]];
+              return `
+                <div class="adv-s2-rgb-group" style="background:var(--bg-subtle); padding:4px 8px; border-radius:6px; border:1px solid var(--border-light);">
+                  <span style="font-size:10.5px; color:var(--text-muted);">Px ${pxIdx + 1}:</span>
+                  <strong style="font-family:'JetBrains Mono',monospace; font-size:11px;">${lbl}</strong>
+                  <span class="adv-color-swatch" style="background: rgb(${oR}, ${oG}, ${oB}); width:18px; height:18px;" title="${lbl}(${oR}, ${oG}, ${oB})"></span>
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">(${oR},${oG},${oB})</span>
+                </div>
+              `;
+            }).join('');
 
         s2VisualBox.innerHTML = `
           <div class="adv-demo-header">
-            <span><i class="fa-solid fa-palette"></i> <b>Fixed RGB Order Example:</b> ${permName} ([R,G,B] → [${chNames[pOrder[0]]},${chNames[pOrder[1]]},${chNames[pOrder[2]]}])</span>
-            <span class="adv-stage-badge experimental">Uniform Mapping</span>
+            <span><i class="fa-solid fa-palette"></i> <b>Custom Keyed Sequence Example (Illustrative Offset 0):</b> Cycling <code>${seq.map(id => BitEngine.CHANNEL_PERM_LABELS[id]).join(' → ') || 'None'}</code></span>
           </div>
-          <div class="adv-s2-flow">
+          <div class="adv-s2-flow" style="align-items: center;">
             <div class="adv-s2-rgb-group">
               <span class="adv-color-swatch" style="background: rgb(255, 100, 50);" title="Original RGB(255, 100, 50)"></span>
               <span class="adv-rgb-pill r">R = 255</span>
@@ -1052,11 +1167,8 @@ document.addEventListener('DOMContentLoaded', () => {
               <span class="adv-rgb-pill b">B = 50</span>
             </div>
             <i class="fa-solid fa-arrow-right" style="color: var(--text-muted);"></i>
-            <div class="adv-s2-rgb-group">
-              <span class="adv-rgb-pill ${chCls[pOrder[0]]}">Out R ← ${chNames[pOrder[0]]} (${outR})</span>
-              <span class="adv-rgb-pill ${chCls[pOrder[1]]}">Out G ← ${chNames[pOrder[1]]} (${outG})</span>
-              <span class="adv-rgb-pill ${chCls[pOrder[2]]}">Out B ← ${chNames[pOrder[2]]} (${outB})</span>
-              <span class="adv-color-swatch" style="background: rgb(${outR}, ${outG}, ${outB});" title="Output ${permName}(${outR}, ${outG}, ${outB})"></span>
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              ${examplesHtml}
             </div>
           </div>
         `;
@@ -1158,15 +1270,15 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderStage3LivePreview() {
       if (!s3PreviewCanvas || !s3PreviewStats) return;
       const s1On = s1Chk ? s1Chk.checked : true;
-      const B = s1BlockSlider ? (parseInt(s1BlockSlider.value, 10) || 1) : 1;
+      const B = Math.max(1, Math.min(32, appliedPreviewBlockSize | 0));
       const s2On = s2Chk ? s2Chk.checked : true;
-      const mode = s2ModeSel ? s2ModeSel.value : 'keyed';
-      const fixedId = s2FixedSel ? (parseInt(s2FixedSel.value, 10) || 0) : 1;
+      const mode = (s2ModeSel && s2ModeSel.value === 'sequence') ? 'sequence' : 'keyed';
       const s3On = s3Chk ? s3Chk.checked : true;
       const k = s3KSlider ? (parseInt(s3KSlider.value, 10) || 2) : 2;
       const rOn = s3ChR ? s3ChR.checked : true;
       const gOn = s3ChG ? s3ChG.checked : true;
       const bOn = s3ChB ? s3ChB.checked : true;
+      const stepInfo = formatPreviewStepChain(3);
 
       let allowedIds = [];
       for (let i = 0; i < 6; i++) {
@@ -1182,12 +1294,16 @@ document.addEventListener('DOMContentLoaded', () => {
       };
       const scopeName = scopeLabels[state.encScope] || 'Entire Image';
 
+      if (s3PreviewTitle) {
+        s3PreviewTitle.innerHTML = `<i class="fa-solid fa-eye"></i> <b>Illustrative Stage 3 Preview (Step ${stepInfo.stepNum} of 3):</b> Cumulative ${stepInfo.chain}`;
+      }
+
       if (s3PreviewScopeTag) {
         const hasCh = rOn || gOn || bOn;
         s3PreviewScopeTag.className = 'adv-stage-badge ' + (!s3On ? 'disabled' : (hasCh ? 'enabled' : 'experimental'));
         s3PreviewScopeTag.textContent = !s3On
-          ? 'Stage 3 Disabled'
-          : (hasCh ? `k=${k} MSB XOR • ${scopeName}` : 'Select Channel!');
+          ? 'Stage 3 Disabled (Skipped)'
+          : (hasCh ? `Step ${stepInfo.stepNum} • k=${k} MSB XOR • ${scopeName}` : 'Select Channel!');
       }
 
       let srcImageData = null;
@@ -1215,18 +1331,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const H = srcImageData.height;
 
       const noChannels = s3On && !rOn && !gOn && !bOn;
-      const previewRes = BitEngine.previewStage3MsbXor(srcImageData, activeMask, {
-        encryptionMode: 'advanced',
-        stage1Enabled: s1On,
-        stage1BlockSize: B,
-        stage2Enabled: s2On,
-        stage2Mode: mode,
-        stage2FixedPermId: fixedId,
-        stage2AllowedIds: allowedIds,
-        stage3Enabled: s3On && !noChannels,
-        k,
-        stage3Channels: { r: rOn, g: gOn, b: bOn }
-      });
+      const { allOff, cfg } = getCurrentPreviewStageConfig();
+      const previewRes = allOff
+        ? { previewImageData: srcImageData }
+        : BitEngine.previewPipelineStep(srcImageData, activeMask, cfg, stepInfo.posIdx);
 
       s3PreviewCanvas.width = W;
       s3PreviewCanvas.height = H;
@@ -1245,7 +1353,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!s3On) {
         s3PreviewStats.innerHTML = `
           <div>${samplePrefix}</div>
-          <div style="margin-top:6px;"><strong>Stage 3 Disabled:</strong> Shows cumulative output from Stage 1${s2On ? ' + Stage 2' : ''} without <i>k</i>-MSB XOR masking.</div>
+          <div style="margin-top:6px;"><strong>Stage 3 Disabled (Skipped in Step ${stepInfo.stepNum}):</strong> Shows cumulative output without <i>k</i>-MSB XOR masking.</div>
         `;
       } else if (noChannels) {
         s3PreviewStats.innerHTML = `
@@ -1254,7 +1362,11 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
       } else {
         const s1Label = s1On ? `${B}×${B} px` : 'OFF';
-        const s2Label = !s2On ? 'OFF' : (mode === 'fixed' ? `Fixed ${BitEngine.CHANNEL_PERM_LABELS[fixedId] || 'RGB'}` : `Keyed (${allowedIds.length}/6)`);
+        const s2Label = !s2On
+          ? 'OFF'
+          : (mode === 'sequence'
+            ? `Seq (${state.advStage2Sequence.length})`
+            : `Keyed (${allowedIds.length}/6)`);
         s3PreviewStats.innerHTML = `
           <div>${samplePrefix}</div>
           <div class="adv-s1-stat-list">
@@ -1262,36 +1374,246 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="adv-s1-stat-item">Stage 2<strong>${s2Label}</strong></div>
             <div class="adv-s1-stat-item">Stage 3 XOR<strong>k=${k} (${chStr})</strong></div>
           </div>
-          <div style="margin-top:6px; font-size:11.5px;">Illustrative pre-key 3-stage pipeline preview: <b>${chList.length * k} / 24 bits</b> XORed per pixel inside <b>${scopeName}</b>.</div>
+          <div style="margin-top:6px; font-size:11.5px;">Illustrative pre-key preview at <b>Step ${stepInfo.stepNum}</b> (<code>${stepInfo.chain}</code>): <b>${chList.length * k} / 24 bits</b> XORed per pixel inside <b>${scopeName}</b>.</div>
         `;
       }
     }
 
-    function syncAdvancedStageUI() {
+    const stageMetaInfo = {
+      1: { title: 'Stage 1 — Keyed Fisher–Yates Pixel Permutation', sub: 'Spatial pixel / block shuffling' },
+      2: { title: 'Stage 2 — RGB Channel Permutation', sub: 'Red, Green, Blue channel rearrangement' },
+      3: { title: 'Stage 3 — k-MSB XOR Encryption', sub: 'Top k Most Significant Bits keystream XOR' }
+    };
+
+    const permSubDesc = [
+      '[R, G, B] Identity',
+      '[R, B, G] Swap G↔B',
+      '[G, R, B] Swap R↔G',
+      '[G, B, R] Cycle Left',
+      '[B, R, G] Cycle Right',
+      '[B, G, R] Reverse'
+    ];
+
+    let dragStageIdx = -1;
+    function moveStageOrder(fromIdx, toIdx) {
+      if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0 || fromIdx >= 3 || toIdx >= 3) return;
+      const arr = state.advStageOrder.slice();
+      const [moved] = arr.splice(fromIdx, 1);
+      arr.splice(toIdx, 0, moved);
+      state.advStageOrder = arr;
+      syncAdvancedStageUI();
+    }
+
+    function renderStageOrderList() {
+      if (!stageOrderListEl) return;
+      const sEnabled = {
+        1: s1Chk ? s1Chk.checked : true,
+        2: s2Chk ? s2Chk.checked : true,
+        3: s3Chk ? s3Chk.checked : true
+      };
+      const order = state.advStageOrder;
+      if (stageOrderBadgeEl) {
+        const activeOrder = order.filter(s => sEnabled[s]);
+        stageOrderBadgeEl.textContent = activeOrder.length > 0
+          ? activeOrder.map(s => `Stage ${s}`).join(' → ')
+          : 'No stages enabled';
+      }
+
+      stageOrderListEl.innerHTML = '';
+      order.forEach((stageNum, idx) => {
+        const info = stageMetaInfo[stageNum];
+        const enabled = sEnabled[stageNum];
+        const row = document.createElement('div');
+        row.className = 'adv-order-item' + (enabled ? '' : ' stage-skipped');
+        row.setAttribute('draggable', 'true');
+        row.setAttribute('role', 'listitem');
+        row.dataset.idx = String(idx);
+        row.innerHTML = `
+          <div class="adv-order-item-left">
+            <span class="adv-order-drag-handle" title="Drag to reorder"><i class="fa-solid fa-grip-vertical"></i></span>
+            <span class="adv-order-step-badge">${idx + 1}</span>
+            <div class="adv-order-item-info">
+              <strong>${info.title}${enabled ? '' : ' (Disabled — Skipped)'}</strong>
+              <span>${info.sub}</span>
+            </div>
+          </div>
+          <div class="adv-order-arrows">
+            <button type="button" class="adv-order-arrow-btn" data-dir="up" ${idx === 0 ? 'disabled' : ''} title="Move Up" aria-label="Move ${info.title} up">
+              <i class="fa-solid fa-arrow-up"></i>
+            </button>
+            <button type="button" class="adv-order-arrow-btn" data-dir="down" ${idx === order.length - 1 ? 'disabled' : ''} title="Move Down" aria-label="Move ${info.title} down">
+              <i class="fa-solid fa-arrow-down"></i>
+            </button>
+          </div>
+        `;
+
+        row.querySelector('[data-dir="up"]').addEventListener('click', (e) => {
+          e.stopPropagation();
+          moveStageOrder(idx, idx - 1);
+        });
+        row.querySelector('[data-dir="down"]').addEventListener('click', (e) => {
+          e.stopPropagation();
+          moveStageOrder(idx, idx + 1);
+        });
+
+        row.addEventListener('dragstart', (e) => {
+          dragStageIdx = idx;
+          row.classList.add('dragging');
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', String(idx));
+          }
+        });
+        row.addEventListener('dragend', () => {
+          dragStageIdx = -1;
+          row.classList.remove('dragging');
+          stageOrderListEl.querySelectorAll('.adv-order-item').forEach(el => el.classList.remove('drag-over'));
+        });
+        row.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          row.classList.add('drag-over');
+        });
+        row.addEventListener('dragleave', () => {
+          row.classList.remove('drag-over');
+        });
+        row.addEventListener('drop', (e) => {
+          e.preventDefault();
+          row.classList.remove('drag-over');
+          const from = dragStageIdx >= 0 ? dragStageIdx : parseInt(e.dataTransfer ? e.dataTransfer.getData('text/plain') : '-1', 10);
+          if (!Number.isNaN(from) && from >= 0) {
+            moveStageOrder(from, idx);
+          }
+        });
+
+        stageOrderListEl.appendChild(row);
+      });
+    }
+
+    let dragSeqIdx = -1;
+    function moveStage2Sequence(fromIdx, toIdx) {
+      const seq = state.advStage2Sequence.slice();
+      if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0 || fromIdx >= seq.length || toIdx >= seq.length) return;
+      const [moved] = seq.splice(fromIdx, 1);
+      seq.splice(toIdx, 0, moved);
+      state.advStage2Sequence = seq;
+      syncAdvancedStageUI();
+    }
+
+    function renderStage2SequenceList() {
+      if (!s2SeqListEl) return;
+      const seq = state.advStage2Sequence;
+      if (s2SeqPreviewBadge) {
+        s2SeqPreviewBadge.textContent = seq.length > 0
+          ? seq.map(id => BitEngine.CHANNEL_PERM_LABELS[id]).join(' → ')
+          : 'No arrangements selected';
+      }
+
+      s2SeqListEl.innerHTML = '';
+      if (seq.length === 0) {
+        s2SeqListEl.innerHTML = `<div style="font-size:12px; color:#dc2626; padding:6px;">Select at least one RGB arrangement above to build your sequence.</div>`;
+        return;
+      }
+
+      seq.forEach((permId, idx) => {
+        const lbl = BitEngine.CHANNEL_PERM_LABELS[permId] || 'RGB';
+        const row = document.createElement('div');
+        row.className = 'adv-order-item';
+        row.setAttribute('draggable', 'true');
+        row.setAttribute('role', 'listitem');
+        row.innerHTML = `
+          <div class="adv-order-item-left">
+            <span class="adv-order-drag-handle" title="Drag to reorder"><i class="fa-solid fa-grip-vertical"></i></span>
+            <span class="adv-order-step-badge">${idx + 1}</span>
+            <div class="adv-order-item-info">
+              <strong style="font-family:'JetBrains Mono',monospace;">${lbl}</strong>
+              <span>${permSubDesc[permId] || ''}</span>
+            </div>
+          </div>
+          <div class="adv-order-arrows">
+            <button type="button" class="adv-order-arrow-btn" data-dir="up" ${idx === 0 ? 'disabled' : ''} title="Move Up" aria-label="Move ${lbl} up">
+              <i class="fa-solid fa-arrow-up"></i>
+            </button>
+            <button type="button" class="adv-order-arrow-btn" data-dir="down" ${idx === seq.length - 1 ? 'disabled' : ''} title="Move Down" aria-label="Move ${lbl} down">
+              <i class="fa-solid fa-arrow-down"></i>
+            </button>
+          </div>
+        `;
+
+        row.querySelector('[data-dir="up"]').addEventListener('click', (e) => {
+          e.stopPropagation();
+          moveStage2Sequence(idx, idx - 1);
+        });
+        row.querySelector('[data-dir="down"]').addEventListener('click', (e) => {
+          e.stopPropagation();
+          moveStage2Sequence(idx, idx + 1);
+        });
+
+        row.addEventListener('dragstart', (e) => {
+          dragSeqIdx = idx;
+          row.classList.add('dragging');
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', String(idx));
+          }
+        });
+        row.addEventListener('dragend', () => {
+          dragSeqIdx = -1;
+          row.classList.remove('dragging');
+          s2SeqListEl.querySelectorAll('.adv-order-item').forEach(el => el.classList.remove('drag-over'));
+        });
+        row.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          row.classList.add('drag-over');
+        });
+        row.addEventListener('dragleave', () => {
+          row.classList.remove('drag-over');
+        });
+        row.addEventListener('drop', (e) => {
+          e.preventDefault();
+          row.classList.remove('drag-over');
+          const from = dragSeqIdx >= 0 ? dragSeqIdx : parseInt(e.dataTransfer ? e.dataTransfer.getData('text/plain') : '-1', 10);
+          if (!Number.isNaN(from) && from >= 0) {
+            moveStage2Sequence(from, idx);
+          }
+        });
+
+        s2SeqListEl.appendChild(row);
+      });
+    }
+
+    function syncAdvancedStageUI(opts = {}) {
       const s1On = s1Chk ? s1Chk.checked : true;
       const s1BlockSize = s1BlockSlider ? (parseInt(s1BlockSlider.value, 10) || 1) : 1;
       const s2On = s2Chk ? s2Chk.checked : true;
       const s3On = s3Chk ? s3Chk.checked : true;
-      const s2Mode = s2ModeSel ? s2ModeSel.value : 'keyed';
-      const s2FixedId = s2FixedSel ? (parseInt(s2FixedSel.value, 10) || 0) : 1;
+      const s2Mode = (s2ModeSel && s2ModeSel.value === 'sequence') ? 'sequence' : 'keyed';
       const k = s3KSlider ? (parseInt(s3KSlider.value, 10) || 2) : 2;
       const rOn = s3ChR ? s3ChR.checked : true;
       const gOn = s3ChG ? s3ChG.checked : true;
       const bOn = s3ChB ? s3ChB.checked : true;
 
-      if (s2ModeRadioKeyed) s2ModeRadioKeyed.checked = (s2Mode !== 'fixed');
-      if (s2ModeRadioFixed) s2ModeRadioFixed.checked = (s2Mode === 'fixed');
-      if (lblS2ModeKeyed) lblS2ModeKeyed.classList.toggle('active', s2Mode !== 'fixed');
-      if (lblS2ModeFixed) lblS2ModeFixed.classList.toggle('active', s2Mode === 'fixed');
+      if (s2ModeRadioKeyed) s2ModeRadioKeyed.checked = (s2Mode !== 'sequence');
+      if (s2ModeRadioSeq) s2ModeRadioSeq.checked = (s2Mode === 'sequence');
+      if (lblS2ModeKeyed) lblS2ModeKeyed.classList.toggle('active', s2Mode !== 'sequence');
+      if (lblS2ModeSeq) lblS2ModeSeq.classList.toggle('active', s2Mode === 'sequence');
 
       let s2AllowedCount = 0;
+      const checkedIds = [];
       for (let i = 0; i < 6; i++) {
         const isChk = s2PermChks[i] ? s2PermChks[i].checked : true;
-        if (isChk) s2AllowedCount++;
+        if (isChk) {
+          s2AllowedCount++;
+          checkedIds.push(i);
+        }
         if (s2PermLbls[i]) s2PermLbls[i].classList.toggle('active', isChk);
-        if (s2FixRadios[i]) s2FixRadios[i].checked = (i === s2FixedId);
-        if (s2FixLbls[i]) s2FixLbls[i].classList.toggle('active', i === s2FixedId);
       }
+
+      // Keep state.advStage2Sequence synced with checkedIds (remove unchecked, append newly checked)
+      const nextSeq = state.advStage2Sequence.filter(id => checkedIds.includes(id));
+      for (const id of checkedIds) {
+        if (!nextSeq.includes(id)) nextSeq.push(id);
+      }
+      state.advStage2Sequence = nextSeq;
 
       if (s2AllowedBadge) {
         if (s2AllowedCount === 0) {
@@ -1307,20 +1629,49 @@ document.addEventListener('DOMContentLoaded', () => {
       if (s2Card) s2Card.classList.toggle('stage-disabled', !s2On);
       if (s3Card) s3Card.classList.toggle('stage-disabled', !s3On);
 
+      // Reorder the actual Stage Cards below to follow the chosen Execution Order,
+      // moving any disabled stage cards to the bottom.
+      const sEnabledMap = { 1: s1On, 2: s2On, 3: s3On };
+      const cardMap = { 1: s1Card, 2: s2Card, 3: s3Card };
+      const numBadgeMap = { 1: s1NumBadge, 2: s2NumBadge, 3: s3NumBadge };
+      const ordLabels = ['1st', '2nd', '3rd'];
+      const enabledOrdered = state.advStageOrder.filter(s => sEnabledMap[s]);
+      const disabledOrdered = state.advStageOrder.filter(s => !sEnabledMap[s]);
+      const visualCardOrder = [...enabledOrdered, ...disabledOrdered];
+
+      enabledOrdered.forEach((sNum, idx) => {
+        if (numBadgeMap[sNum]) {
+          numBadgeMap[sNum].textContent = `${ordLabels[idx] || `${idx + 1}th`} • Stage ${sNum}`;
+        }
+      });
+      disabledOrdered.forEach((sNum) => {
+        if (numBadgeMap[sNum]) {
+          numBadgeMap[sNum].textContent = `Disabled • Stage ${sNum}`;
+        }
+      });
+      if (advStagesContainer) {
+        visualCardOrder.forEach((sNum) => {
+          const cardEl = cardMap[sNum];
+          if (cardEl && cardEl.parentElement === advStagesContainer) {
+            advStagesContainer.appendChild(cardEl);
+          }
+        });
+      }
+
       if (s1Badge) {
         s1Badge.className = 'adv-stage-badge ' + (s1On ? 'enabled' : 'disabled');
         s1Badge.textContent = s1On ? `ENABLED (${s1BlockSize}×${s1BlockSize} px)` : 'DISABLED';
       }
       if (s2Badge) {
-        const isFixed = s2On && s2Mode === 'fixed';
-        const isErr = s2On && s2Mode === 'keyed' && s2AllowedCount === 0;
-        s2Badge.className = 'adv-stage-badge ' + (!s2On ? 'disabled' : ((isFixed || isErr) ? 'experimental' : 'enabled'));
+        const isSeq = s2On && s2Mode === 'sequence';
+        const isErr = s2On && s2AllowedCount === 0;
+        s2Badge.className = 'adv-stage-badge ' + (!s2On ? 'disabled' : ((isSeq || isErr) ? 'experimental' : 'enabled'));
         s2Badge.textContent = !s2On
           ? 'DISABLED'
           : (isErr
-            ? 'SELECT PERMUTATION!'
-            : (isFixed
-              ? `ENABLED (Fixed ${BitEngine.CHANNEL_PERM_LABELS[s2FixedId] || 'RGB'})`
+            ? 'SELECT ARRANGEMENT!'
+            : (isSeq
+              ? `ENABLED (Sequence • ${state.advStage2Sequence.length} Perms)`
               : (s2AllowedCount === 6 ? 'ENABLED (Key-Driven)' : `ENABLED (Key-Driven • ${s2AllowedCount}/6 Perms)`)));
       }
       if (s3Badge) {
@@ -1335,9 +1686,14 @@ document.addEventListener('DOMContentLoaded', () => {
           : (hasErr ? 'SELECT CHANNEL!' : `ENABLED (k=${k} • ${chArr.join(',')})`);
       }
 
-      renderStage1Demo();
-      renderStage2Visual();
-      renderStage3BitPlanes();
+      const skipPreviews = !!(opts && opts.skipLivePreviews);
+      renderStageOrderList();
+      renderStage2SequenceList();
+      renderStage1Demo(skipPreviews);
+      if (!skipPreviews) {
+        renderStage2Visual();
+        renderStage3BitPlanes();
+      }
 
       const check = getUiStageConfigValidation();
       if (summaryTextEl) {
@@ -1346,7 +1702,7 @@ document.addEventListener('DOMContentLoaded', () => {
           : `<b style="color:#ef4444;">Invalid Pipeline Configuration:</b> ${check.error}`;
       }
 
-      const hasWeakerSecuritySetting = (!s1On || !s2On || !s3On || s2Mode === 'fixed' || !rOn || !gOn || !bOn);
+      const hasWeakerSecuritySetting = (!s1On || !s2On || !s3On || s2Mode === 'sequence' || !rOn || !gOn || !bOn);
       if (valBannerEl) {
         if (!check.valid) {
           valBannerEl.style.display = 'flex';
@@ -1355,7 +1711,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (hasWeakerSecuritySetting) {
           valBannerEl.style.display = 'flex';
           valBannerEl.className = 'adv-validation-banner warn';
-          valBannerEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i><div><strong>Experimental Configuration (Potentially Weaker Security):</strong> You have disabled one or more stages, selected a fixed RGB permutation, or excluded colour channels. While 100% reversible via <code>msBX</code> metadata, full 3-stage keyed encryption is recommended for maximum security.</div>`;
+          valBannerEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i><div><strong>Custom Security Note:</strong> You have disabled one or more stages, selected Custom Keyed Sequence (less unpredictable than independent Key-Driven selection), or excluded colour channels. All settings remain 100% reversible via <code>msBX</code> metadata.</div>`;
         } else {
           valBannerEl.style.display = 'none';
           valBannerEl.innerHTML = '';
@@ -1366,9 +1722,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.encMode === 'standard') {
           modeBadge.textContent = 'Standard 3-Stage Mode';
         } else if (check.valid && check.config) {
+          const orderShort = state.advStageOrder.map(n => `S${n}`).join('→');
           modeBadge.textContent = hasWeakerSecuritySetting
-            ? `Advanced Mode (${check.config.enabledCount}-Stage Experimental)`
-            : `Advanced Mode (3-Stage Custom • ${s1BlockSize}×${s1BlockSize} px • k=${check.config.k})`;
+            ? `Advanced Mode (${orderShort} • Custom)`
+            : `Advanced Mode (${orderShort} • ${s1BlockSize}×${s1BlockSize} px • k=${check.config.k})`;
         } else {
           modeBadge.textContent = 'Advanced Mode (Check Settings)';
         }
@@ -1394,17 +1751,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function resetAdvancedToDefault() {
+      state.advStageOrder = [1, 2, 3];
+      state.advStage2Sequence = [0, 1, 2, 3, 4, 5];
+      appliedPreviewBlockSize = 1;
       if (s1Chk) s1Chk.checked = true;
       if (s1BlockSlider) s1BlockSlider.value = '1';
       if (s2Chk) s2Chk.checked = true;
       if (s3Chk) s3Chk.checked = true;
       if (s2ModeSel) s2ModeSel.value = 'keyed';
-      if (s2FixedSel) s2FixedSel.value = '1';
       if (s2ModeRadioKeyed) s2ModeRadioKeyed.checked = true;
-      if (s2ModeRadioFixed) s2ModeRadioFixed.checked = false;
+      if (s2ModeRadioSeq) s2ModeRadioSeq.checked = false;
       for (let i = 0; i < 6; i++) {
         if (s2PermChks[i]) s2PermChks[i].checked = true;
-        if (s2FixRadios[i]) s2FixRadios[i].checked = (i === 1);
       }
       if (s3KSlider) s3KSlider.value = '2';
       if (s3ChR) s3ChR.checked = true;
@@ -1414,13 +1772,50 @@ document.addEventListener('DOMContentLoaded', () => {
       syncAdvancedStageUI();
     }
 
+    function applySelectedBlockSizeToPreview() {
+      let val = s1BlockSlider ? parseInt(s1BlockSlider.value, 10) : 1;
+      if (Number.isNaN(val)) val = 1;
+      val = Math.max(1, Math.min(32, val));
+      if (s1BlockSlider) s1BlockSlider.value = String(val);
+      appliedPreviewBlockSize = val;
+      syncAdvancedStageUI();
+    }
+
     if (btnStd) btnStd.addEventListener('click', () => setEncryptionMode('standard'));
     if (btnAdv) btnAdv.addEventListener('click', () => setEncryptionMode('advanced'));
     if (btnResetAdv) btnResetAdv.addEventListener('click', resetAdvancedToDefault);
+    if (btnResetStageOrder) {
+      btnResetStageOrder.addEventListener('click', () => {
+        state.advStageOrder = [1, 2, 3];
+        syncAdvancedStageUI();
+      });
+    }
     if (btnS1ResetBlock) {
       btnS1ResetBlock.addEventListener('click', () => {
         if (s1BlockSlider) s1BlockSlider.value = '1';
+        appliedPreviewBlockSize = 1;
         syncAdvancedStageUI();
+      });
+    }
+    if (btnS1ApplyBlock) {
+      btnS1ApplyBlock.addEventListener('click', applySelectedBlockSizeToPreview);
+    }
+    s1PresetBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const val = parseInt(btn.getAttribute('data-block'), 10) || 1;
+        if (s1BlockSlider) s1BlockSlider.value = String(val);
+        syncAdvancedStageUI({ skipLivePreviews: true });
+      });
+    });
+    if (s1BlockSlider) {
+      s1BlockSlider.addEventListener('input', () => {
+        syncAdvancedStageUI({ skipLivePreviews: true });
+      });
+      s1BlockSlider.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          applySelectedBlockSizeToPreview();
+        }
       });
     }
     if (btnS2ResetPerms) {
@@ -1428,6 +1823,17 @@ document.addEventListener('DOMContentLoaded', () => {
         for (let i = 0; i < 6; i++) {
           if (s2PermChks[i]) s2PermChks[i].checked = true;
         }
+        state.advStage2Sequence = [0, 1, 2, 3, 4, 5];
+        syncAdvancedStageUI();
+      });
+    }
+    if (btnS2ResetSeq) {
+      btnS2ResetSeq.addEventListener('click', () => {
+        const checkedIds = [];
+        for (let i = 0; i < 6; i++) {
+          if (s2PermChks[i] && s2PermChks[i].checked) checkedIds.push(i);
+        }
+        state.advStage2Sequence = checkedIds;
         syncAdvancedStageUI();
       });
     }
@@ -1438,24 +1844,16 @@ document.addEventListener('DOMContentLoaded', () => {
         syncAdvancedStageUI();
       });
     }
-    if (s2ModeRadioFixed) {
-      s2ModeRadioFixed.addEventListener('change', () => {
-        if (s2ModeRadioFixed.checked && s2ModeSel) s2ModeSel.value = 'fixed';
+    if (s2ModeRadioSeq) {
+      s2ModeRadioSeq.addEventListener('change', () => {
+        if (s2ModeRadioSeq.checked && s2ModeSel) s2ModeSel.value = 'sequence';
         syncAdvancedStageUI();
       });
     }
 
     s2PermChks.forEach(chk => {
       if (!chk) return;
-      chk.addEventListener('change', syncAdvancedStageUI);
-    });
-
-    s2FixRadios.forEach(rad => {
-      if (!rad) return;
-      rad.addEventListener('change', () => {
-        if (rad.checked && s2FixedSel) s2FixedSel.value = rad.value;
-        syncAdvancedStageUI();
-      });
+      chk.addEventListener('change', () => syncAdvancedStageUI());
     });
 
     if (s1ReshuffleBtn) {
@@ -1466,14 +1864,13 @@ document.addEventListener('DOMContentLoaded', () => {
           const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
         }
         s1DemoPerm = arr;
-        renderStage1Demo();
+        renderStage1Demo(true);
       });
     }
 
-    [s1Chk, s1BlockSlider, s2Chk, s3Chk, s2ModeSel, s2FixedSel, s3KSlider, s3ChR, s3ChG, s3ChB].forEach(ctrl => {
+    [s1Chk, s2Chk, s3Chk, s2ModeSel, s3KSlider, s3ChR, s3ChG, s3ChB].forEach(ctrl => {
       if (!ctrl) return;
-      ctrl.addEventListener('input', syncAdvancedStageUI);
-      ctrl.addEventListener('change', syncAdvancedStageUI);
+      ctrl.addEventListener('change', () => syncAdvancedStageUI());
     });
 
     syncAdvancedStageUI();
@@ -1584,6 +1981,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (DOM.valDecPsnr) DOM.valDecPsnr.textContent = '∞ dB';
     if (DOM.valDecSwapped) DOM.valDecSwapped.textContent = '0';
     if (DOM.btnDownloadRestored) DOM.btnDownloadRestored.disabled = true;
+    if (typeof window.__refreshDecCompareUI === 'function') window.__refreshDecCompareUI();
   }
 
   function showDecError(title, message) {
@@ -4936,31 +5334,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
           renderImageDataToCanvas(result.imageData, DOM.canvasDecResult, DOM.phDecResult);
 
-          if (state.lastOriginalImageData &&
-            state.lastOriginalImageData.width === result.imageData.width &&
-            state.lastOriginalImageData.height === result.imageData.height) {
-            const fidelity = BitEngine.calculateMetrics(state.lastOriginalImageData, result.imageData);
-            DOM.valDecMse.textContent = fidelity.mse.toFixed(4);
-            DOM.valDecPsnr.textContent = fidelity.psnr === Infinity ? '∞ dB' : (fidelity.psnr + ' dB');
-          } else {
-            DOM.valDecMse.textContent = '0.0000';
-            DOM.valDecPsnr.textContent = '∞ dB';
-          }
-
-          DOM.valDecSwapped.textContent = result.swappedCount.toLocaleString();
           const titleEl = document.getElementById('dec-fidelity-title');
           const descEl = document.getElementById('dec-fidelity-desc');
           if (titleEl) {
-            titleEl.textContent = 'SHA-256 Verification Tag Matched • 0 Different Pixels';
+            titleEl.textContent = 'SHA-256 Cryptographic Integrity Verified — Image Restored';
           }
           if (descEl) {
             const chunkDisp = result.metadata.chunkDisplay || (result.metadata.isLegacyChunk ? 'msBx (Legacy)' : 'msBX');
-            descEl.innerHTML = `Embedded PNG <code>${chunkDisp}</code> metadata verified (<code>${result.metadata.identifier}</code> v${result.metadata.metaVersion}, ${result.metadata.iterations.toLocaleString()} SHA-256 iterations, <i>k</i> = ${result.metadata.k}, ${result.processingTimeMs} ms). Exact lossless recovery achieved (<code>Different pixels = 0</code>, <code>MSE = 0.0000</code>, <code>PSNR = ∞ dB</code>).`;
+            const revSummary = (result.metadata.stageConfig && result.metadata.stageConfig.reverseStagesSummary)
+              ? ` • Reversed: <code>${result.metadata.stageConfig.reverseStagesSummary}</code>`
+              : '';
+            descEl.innerHTML = `Embedded PNG <code>${chunkDisp}</code> metadata verified (<code>${result.metadata.identifier}</code> v${result.metadata.metaVersion}, ${result.metadata.iterations.toLocaleString()} SHA-256 iterations, <i>k</i> = ${result.metadata.k}, ${result.processingTimeMs} ms)${revSummary}. Use the optional comparison section below if you wish to compare against an uploaded original image.`;
           }
 
-          DOM.decMetrics.style.display = 'flex';
-          DOM.decFidelityCard.style.display = 'flex';
+          if (DOM.decMetrics) DOM.decMetrics.style.display = 'none';
+          if (DOM.decFidelityCard) DOM.decFidelityCard.style.display = 'flex';
           DOM.btnDownloadRestored.disabled = false;
+          if (typeof window.__refreshDecCompareUI === 'function') window.__refreshDecCompareUI();
           return;
         }
 
@@ -4985,30 +5375,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
           renderImageDataToCanvas(result.imageData, DOM.canvasDecResult, DOM.phDecResult);
 
-          if (state.lastOriginalImageData &&
-            state.lastOriginalImageData.width === result.imageData.width &&
-            state.lastOriginalImageData.height === result.imageData.height) {
-            const fidelity = BitEngine.calculateMetrics(state.lastOriginalImageData, result.imageData);
-            DOM.valDecMse.textContent = fidelity.mse.toFixed(4);
-            DOM.valDecPsnr.textContent = fidelity.psnr === Infinity ? '∞ dB' : (fidelity.psnr + ' dB');
-          } else {
-            DOM.valDecMse.textContent = '0.0000';
-            DOM.valDecPsnr.textContent = '∞ dB';
-          }
-
-          DOM.valDecSwapped.textContent = result.swappedCount.toLocaleString();
           const titleEl = document.getElementById('dec-fidelity-title');
           const descEl = document.getElementById('dec-fidelity-desc');
           if (titleEl) {
-            titleEl.textContent = 'Legacy .msbx SHA-256 Verification Tag Matched • 0 Different Pixels';
+            titleEl.textContent = 'Legacy .msbx SHA-256 Integrity Verified — Image Restored';
           }
           if (descEl) {
-            descEl.innerHTML = `Legacy 68-byte <code>.msbx</code> header verified (${result.header.iterations.toLocaleString()} SHA-256 iterations, <i>k</i> = ${result.header.k}). Exact lossless recovery achieved (<code>Different pixels = 0</code>, <code>MSE = 0.0000</code>, <code>PSNR = ∞ dB</code>).`;
+            descEl.innerHTML = `Legacy 68-byte <code>.msbx</code> header verified (${result.header.iterations.toLocaleString()} SHA-256 iterations, <i>k</i> = ${result.header.k}). Use the optional comparison section below if you wish to compare against an uploaded original image.`;
           }
 
-          DOM.decMetrics.style.display = 'flex';
-          DOM.decFidelityCard.style.display = 'flex';
+          if (DOM.decMetrics) DOM.decMetrics.style.display = 'none';
+          if (DOM.decFidelityCard) DOM.decFidelityCard.style.display = 'flex';
           DOM.btnDownloadRestored.disabled = false;
+          if (typeof window.__refreshDecCompareUI === 'function') window.__refreshDecCompareUI();
           return;
         }
       } catch (err) {
@@ -5022,6 +5401,156 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }, 50);
   });
+
+  /* ==========================================================================
+     Optional Decrypt Original-Image Comparison Controller
+     ========================================================================== */
+  (function initDecryptOriginalComparison() {
+    const cmpDetails = document.getElementById('dec-compare-details');
+    const cmpInput = document.getElementById('dec-compare-orig-input');
+    const cmpZone = document.getElementById('dec-compare-orig-zone');
+    const cmpLabel = document.getElementById('dec-compare-orig-label');
+    const btnCompare = document.getElementById('btn-dec-compare-images');
+    const cmpError = document.getElementById('dec-compare-error');
+    const cmpErrorMsg = document.getElementById('dec-compare-error-msg');
+    const cmpResults = document.getElementById('dec-compare-results');
+    const cmpStatus = document.getElementById('dec-compare-status');
+    const canvasOrig = document.getElementById('canvas-dec-cmp-orig');
+    const canvasRestored = document.getElementById('canvas-dec-cmp-restored');
+    const valMse = document.getElementById('val-cmp-mse');
+    const valPsnr = document.getElementById('val-cmp-psnr');
+    const valBits = document.getElementById('val-cmp-bits');
+    const valDiffPx = document.getElementById('val-cmp-diff-px');
+    const valMatchPct = document.getElementById('val-cmp-match-pct');
+    const valStatusShort = document.getElementById('val-cmp-status-short');
+
+    function hideCompareError() {
+      if (cmpError) cmpError.style.display = 'none';
+      if (cmpErrorMsg) cmpErrorMsg.textContent = '';
+    }
+
+    function showCompareError(msg) {
+      if (cmpResults) cmpResults.style.display = 'none';
+      if (cmpErrorMsg) cmpErrorMsg.textContent = msg;
+      if (cmpError) cmpError.style.display = 'flex';
+    }
+
+    function refreshCompareBtn() {
+      if (!btnCompare) return;
+      const ready = !!(state.lastDecryptedImageData && state.decCompareOrigImageData);
+      btnCompare.disabled = !ready;
+    }
+
+    window.__refreshDecCompareUI = () => {
+      hideCompareError();
+      if (cmpResults) cmpResults.style.display = 'none';
+      refreshCompareBtn();
+    };
+
+    function decodeExactOriginalFile(file) {
+      if (!file) return;
+      hideCompareError();
+      if (cmpResults) cmpResults.style.display = 'none';
+
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          const w = img.naturalWidth || img.width;
+          const h = img.naturalHeight || img.height;
+          const off = document.createElement('canvas');
+          off.width = w;
+          off.height = h;
+          const ctx = off.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(img, 0, 0, w, h);
+          state.decCompareOrigImageData = ctx.getImageData(0, 0, w, h);
+          state.decCompareOrigName = file.name || 'original_image';
+          if (cmpLabel) {
+            cmpLabel.innerHTML = `<i class="fa-solid fa-circle-check" style="color:var(--accent-emerald);"></i> Loaded: <b>${state.decCompareOrigName}</b> (${w} × ${h} px)`;
+          }
+          refreshCompareBtn();
+        };
+        img.onerror = () => {
+          state.decCompareOrigImageData = null;
+          showCompareError('Could not decode the uploaded original image file. Please select a valid PNG or BMP image.');
+          refreshCompareBtn();
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    if (cmpInput) {
+      cmpInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files[0]) {
+          decodeExactOriginalFile(e.target.files[0]);
+        }
+      });
+    }
+
+    if (cmpZone) {
+      cmpZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        cmpZone.classList.add('drag-over');
+      });
+      cmpZone.addEventListener('dragleave', () => cmpZone.classList.remove('drag-over'));
+      cmpZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        cmpZone.classList.remove('drag-over');
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+          decodeExactOriginalFile(e.dataTransfer.files[0]);
+        }
+      });
+    }
+
+    if (btnCompare) {
+      btnCompare.addEventListener('click', () => {
+        hideCompareError();
+        if (!state.lastDecryptedImageData) {
+          showCompareError('Please decrypt an encrypted image first before comparing.');
+          return;
+        }
+        if (!state.decCompareOrigImageData) {
+          showCompareError('Please upload the original reference image first.');
+          return;
+        }
+
+        try {
+          const cmp = BitEngine.compareImageDataDetailed(state.decCompareOrigImageData, state.lastDecryptedImageData);
+
+          if (canvasOrig) {
+            canvasOrig.width = state.decCompareOrigImageData.width;
+            canvasOrig.height = state.decCompareOrigImageData.height;
+            canvasOrig.getContext('2d').putImageData(state.decCompareOrigImageData, 0, 0);
+          }
+          if (canvasRestored) {
+            canvasRestored.width = state.lastDecryptedImageData.width;
+            canvasRestored.height = state.lastDecryptedImageData.height;
+            canvasRestored.getContext('2d').putImageData(state.lastDecryptedImageData, 0, 0);
+          }
+
+          if (cmpStatus) {
+            cmpStatus.className = 'dec-compare-status-banner ' + (cmp.exactMatch ? 'exact' : 'diff');
+            cmpStatus.innerHTML = cmp.exactMatch
+              ? '<i class="fa-solid fa-circle-check"></i> <span>Exact Match — The restored image is pixel-for-pixel identical to the uploaded original.</span>'
+              : '<i class="fa-solid fa-triangle-exclamation"></i> <span>Images Differ — Some pixel values do not match the uploaded original.</span>';
+          }
+
+          if (valMse) valMse.textContent = cmp.mse === 0 ? '0' : cmp.mse.toFixed(6);
+          if (valPsnr) valPsnr.textContent = cmp.psnr === Infinity ? '∞ dB (Infinity)' : `${cmp.psnr.toFixed(2)} dB`;
+          if (valBits) valBits.textContent = `${cmp.differingBits.toLocaleString()} / ${cmp.totalBits.toLocaleString()} bits`;
+          if (valDiffPx) valDiffPx.textContent = `${cmp.differentPixels.toLocaleString()} / ${cmp.totalPixels.toLocaleString()}`;
+          if (valMatchPct) valMatchPct.textContent = `${cmp.matchingPct.toFixed(cmp.exactMatch ? 0 : 4)}%`;
+          if (valStatusShort) valStatusShort.textContent = cmp.exactMatch ? 'Exact Match' : 'Not Exact Match';
+
+          if (cmpResults) cmpResults.style.display = 'block';
+          if (cmpDetails) cmpDetails.open = true;
+        } catch (err) {
+          showCompareError(err && err.message ? err.message : String(err));
+        }
+      });
+    }
+  })();
 
   DOM.btnDownloadRestored.addEventListener('click', async () => {
     if (!state.lastDecryptedImageData && (!DOM.canvasDecResult || DOM.canvasDecResult.width === 0)) {
